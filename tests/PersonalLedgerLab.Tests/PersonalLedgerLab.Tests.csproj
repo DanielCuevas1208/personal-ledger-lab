@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.12" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PersonalLedgerLab.Core\PersonalLedgerLab.Core.csproj" />
+    <ProjectReference Include="..\..\src\PersonalLedgerLab.Data\PersonalLedgerLab.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\samples\statements\sample-statement.csv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>samples\sample-statement.csv</Link>
+    </Content>
+  </ItemGroup>
+
+</Project>

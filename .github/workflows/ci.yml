@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore PersonalLedgerLab.sln
+
+      - name: Build
+        run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build --logger "console;verbosity=normal"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/*.xml
