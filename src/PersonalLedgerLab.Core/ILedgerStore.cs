@@ -18,6 +18,11 @@ public interface ILedgerStore
     long SaveTransaction(Transaction transaction);
     void ClearTransactions();
 
+    IReadOnlyList<Budget> LoadBudgets();
+    long AddBudget(Budget budget);
+    bool UpdateBudget(Budget budget);
+    bool DeleteBudget(long budgetId);
+
     string DatabasePath { get; }
     bool IsFreshDatabase { get; }
 }

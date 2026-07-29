@@ -9,14 +9,16 @@ needed to run the demo or the tests.
 
 ## What this release does
 
-This first release ships a coherent offline loop:
+This release ships a coherent offline loop and a budget layer:
 
 - Import a bundled CSV bank statement.
 - Reconcile the statement running balance against the replayed ledger.
 - Apply categorization rules that explain each decision in plain language.
 - Edit the chart of accounts and the categorization rules.
+- Set a monthly or recurring budget target per category account.
+- Show a variance report that explains each under and over result.
 - Show a monthly summary with double-entry balances per account.
-- Export the ledger and the summary to CSV files.
+- Export the ledger, the summary, the budgets, and the variance to CSV files.
 - Keep all data in a local SQLite file under your user profile.
 
 ## Architecture
@@ -27,7 +29,7 @@ interface calls only the application service, so the storage and the rules stay
 isolated.
 
 ```text
-PersonalLedgerLab.Core      Domain model, rules, import, export, summaries.
+PersonalLedgerLab.Core      Domain model, rules, import, export, summaries, budgets.
 PersonalLedgerLab.Data      SQLite persistence of the Core model.
 PersonalLedgerLab.App       Avalonia desktop interface and the service facade.
 PersonalLedgerLab.Tests     Deterministic xUnit tests for the core behavior.
@@ -67,6 +69,22 @@ Match types are limited on purpose:
 - `DescriptionRegex` matches a regular expression.
 - `ReferenceEquals` matches the reference field exactly, case-insensitive.
 
+## Budgets and variance
+
+A budget is a target for one category account in one month. A specific budget
+sets a year and a month. A recurring budget uses year 0 and month 0, and it
+applies to any month that has no specific budget for that account. A specific
+budget beats a recurring budget when both cover the same month.
+
+The variance service compares each budget with the matching monthly total. The
+variance is the actual net minus the limit. The service writes one sentence per
+result. An expense result says whether the spending went over or under the cap.
+An income result says whether the earning went above or below the target.
+
+The variance report covers only the budgets that match a month in the summary.
+A budgeted category with no activity counts as zero actual. The operator can
+export the budgets and the variance to CSV for offline review.
+
 ## Setup
 
 You need the .NET 8 SDK. The desktop interface uses Avalonia 11. Restore the
@@ -88,8 +106,8 @@ dotnet run --project src/PersonalLedgerLab.App/PersonalLedgerLab.App.csproj
 Set the `PERSONAL_LEDGER_DB` environment variable to use a different database
 path, for example a file in your project folder for a clean demo run.
 
-Run the tests. Fifty-three deterministic tests cover the core behavior and the
-SQLite persistence.
+Run the tests. Sixty-six deterministic tests cover the core behavior, the
+budgets, and the SQLite persistence.
 
 ```pwsh
 dotnet test PersonalLedgerLab.sln
@@ -108,6 +126,11 @@ the active rules before you save the rule.
 
 Open the Monthly summary tab. It lists each account total per month. Use the
 Export buttons on the Import tab to write the ledger or the summary to CSV.
+
+Open the Budgets tab. The left panel edits a budget. Set a year, a month, a
+category, and a limit. Use year 0 and month 0 for a recurring budget. Double
+click a row on the right grid to load it. The lower grid shows the variance for
+each month. Use the Export buttons to write the budgets or the variance to CSV.
 
 ## Sample data
 
@@ -131,6 +154,19 @@ The seeded chart of accounts uses these codes:
 5400 Utilities       Expense
 5500 Subscriptions   Expense
 5600 Clothing        Expense
+```
+
+The seeded budgets set January 2025 targets for each seeded category:
+
+```text
+4000 Salary         1500.00 USD target
+5000 Groceries       250.00 USD cap
+5100 Dining           80.00 USD cap
+5200 Coffee           25.00 USD cap
+5300 Transport        90.00 USD cap
+5400 Utilities       250.00 USD cap
+5500 Subscriptions    15.00 USD cap
+5600 Clothing         60.00 USD cap
 ```
 
 ## Sample output
@@ -159,6 +195,24 @@ Year,Month,AccountCode,AccountName,AccountType,DebitMinor,CreditMinor,NetMinor,N
 The income total is 1500.00 USD. The expense total is 692.52 USD. The net income
 for the month is 807.48 USD, which equals the change in the Checking balance.
 
+The budget variance report for January 2025 reads:
+
+```csv
+Year,Month,AccountCode,AccountName,AccountType,LimitMinor,ActualMinor,VarianceMinor,VarianceMajor,Currency,Recurring,Explanation
+2025,1,4000,Salary,Income,150000,150000,0,0.00,USD,False,"Spent 1500.00 USD against a 1500.00 USD target ... exactly on target."
+2025,1,5000,Groceries,Expense,25000,20308,-4692,-46.92,USD,False,"... 46.92 USD under budget."
+2025,1,5100,Dining,Expense,8000,7890,-110,-1.10,USD,False,"... 1.10 USD under budget."
+2025,1,5200,Coffee,Expense,2500,1525,-975,-9.75,USD,False,"... 9.75 USD under budget."
+2025,1,5300,Transport,Expense,9000,10015,1015,10.15,USD,False,"... 10.15 USD over budget."
+2025,1,5400,Utilities,Expense,25000,21895,-3105,-31.05,USD,False,"... 31.05 USD under budget."
+2025,1,5500,Subscriptions,Expense,1500,1299,-201,-2.01,USD,False,"... 2.01 USD under budget."
+2025,1,5600,Clothing,Expense,6000,6320,320,3.20,USD,False,"... 3.20 USD over budget."
+```
+
+Two expense accounts go over budget: Transport and Clothing. The rest stay
+under. The Salary income lands exactly on target. Each row carries the sentence
+the operator needs to audit the result back to the monthly total.
+
 A trimmed ledger export shows how each transaction is explained:
 
 ```csv
@@ -174,13 +228,14 @@ account code so a reader can audit a total back to a statement row.
 
 ## Limitations
 
-This first release is intentionally small. The following items are out of
-scope for this run and are listed in the roadmap:
+This release is intentionally small. The following items are out of scope
+for this run and are listed in the roadmap:
 
 - Single-currency ledgers. The schema stores currency per posting, but the
   summary and the import in this release assume one currency per file.
 - One statement format. The importer reads six columns in a fixed order.
-- No budget planning or forecasting.
+- Budgets track one category per row and one month per row. They do not roll
+  over, they do not forecast, and they do not set envelope balances.
 - No multi-user data or sync. The data file is for one local profile.
 - The desktop interface is built in C# rather than XAML. The Avalonia XAML
   source generator needs a newer compiler than the .NET 8 SDK in this
@@ -188,12 +243,13 @@ scope for this run and are listed in the roadmap:
 
 ## Test status
 
-Fifty-three deterministic tests pass. They cover money math, ledger balance,
-the rule engine, the CSV parser, statement reconciliation, monthly summaries,
-CSV export, SQLite persistence, and an end-to-end run of the sample file.
+Sixty-six deterministic tests pass. They cover money math, ledger balance,
+the rule engine, the CSV parser, statement reconciliation, the budget service,
+budget persistence, CSV export, SQLite persistence, and an end-to-end run of
+the sample file with variance.
 
 ```text
-Passed!  - Failed: 0, Passed: 53, Skipped: 0, Total: 53
+Passed!  - Failed: 0, Passed: 66, Skipped: 0, Total: 66
 ```
 
 The CI workflow builds and tests the solution on Windows and Linux. Package
@@ -201,14 +257,18 @@ versions are pinned exactly in each csproj, so a restore is reproducible.
 
 ## Roadmap
 
-The next releases can ship in this order, one coherent release at a time:
+The roadmap records what is complete and what remains. Each remaining step
+ships as one coherent release.
 
-1. Statement adapters: add more bank CSV formats and an OFX reader.
-2. Budgets: add monthly budget targets per category and a variance report.
-3. Multi-currency: add exchange rates at posting time and a consolidated view.
-4. Scheduled transactions: add recurring entries that generate postings.
-5. Reports: add a net-worth chart, a category trend chart, and a print view.
-6. Integrity: add a periodic full reconciliation against a manual trial balance.
+1. Done: offline import, reconciliation, explainable rules, monthly summary,
+   CSV export, and SQLite persistence.
+2. Done: monthly and recurring budgets per category, a variance report, and
+   budget and variance CSV export.
+3. Statement adapters: add more bank CSV formats and an OFX reader.
+4. Multi-currency: add exchange rates at posting time and a consolidated view.
+5. Scheduled transactions: add recurring entries that generate postings.
+6. Reports: add a net-worth chart, a category trend chart, and a print view.
+7. Integrity: add a periodic full reconciliation against a manual trial balance.
 
 ## License
 

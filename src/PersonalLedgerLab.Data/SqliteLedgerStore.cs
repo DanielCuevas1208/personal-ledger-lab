@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using PersonalLedgerLab.Core;
 
@@ -189,10 +190,10 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 var tx = new Transaction
                 {
                     Id = reader.GetInt64(0),
-                    Date = DateOnly.Parse(reader.GetString(1), null),
+                    Date = DateOnly.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
                     Description = reader.GetString(2),
                     Reference = reader.IsDBNull(3) ? null : reader.GetString(3),
-                    Source = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Source = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
                     AppliedRuleId = reader.IsDBNull(5) ? null : reader.GetInt64(5),
                     RuleExplanation = reader.IsDBNull(6) ? null : reader.GetString(6)
                 };
@@ -296,6 +297,85 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
         }
     }
 
+    public IReadOnlyList<Budget> LoadBudgets()
+    {
+        var budgets = new List<Budget>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT id, category_account_id, category_account_code, name,
+                   year, month, limit_minor, currency_code, note
+            FROM budgets
+            ORDER BY year, month, category_account_code;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            budgets.Add(new Budget
+            {
+                Id = reader.GetInt64(0),
+                CategoryAccountId = reader.GetInt64(1),
+                CategoryAccountCode = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Name = reader.GetString(3),
+                Year = reader.GetInt32(4),
+                Month = reader.GetInt32(5),
+                LimitMinor = reader.GetInt64(6),
+                CurrencyCode = reader.GetString(7),
+                Note = reader.IsDBNull(8) ? null : reader.GetString(8)
+            });
+        }
+        return budgets;
+    }
+
+    public long AddBudget(Budget budget)
+    {
+        if (budget is null) throw new ArgumentNullException(nameof(budget));
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO budgets
+                (category_account_id, category_account_code, name, year, month,
+                 limit_minor, currency_code, note)
+            VALUES ($acctId, $acctCode, $name, $year, $month, $limit, $currency, $note);
+            SELECT last_insert_rowid();";
+        AddParam(cmd, "$acctId", budget.CategoryAccountId);
+        AddParam(cmd, "$acctCode", (object?)budget.CategoryAccountCode ?? DBNull.Value);
+        AddParam(cmd, "$name", budget.Name);
+        AddParam(cmd, "$year", budget.Year);
+        AddParam(cmd, "$month", budget.Month);
+        AddParam(cmd, "$limit", budget.LimitMinor);
+        AddParam(cmd, "$currency", budget.CurrencyCode);
+        AddParam(cmd, "$note", (object?)budget.Note ?? DBNull.Value);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public bool UpdateBudget(Budget budget)
+    {
+        if (budget is null) throw new ArgumentNullException(nameof(budget));
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE budgets
+            SET category_account_id = $acctId, category_account_code = $acctCode,
+                name = $name, year = $year, month = $month,
+                limit_minor = $limit, currency_code = $currency, note = $note
+            WHERE id = $id;";
+        AddParam(cmd, "$id", budget.Id);
+        AddParam(cmd, "$acctId", budget.CategoryAccountId);
+        AddParam(cmd, "$acctCode", (object?)budget.CategoryAccountCode ?? DBNull.Value);
+        AddParam(cmd, "$name", budget.Name);
+        AddParam(cmd, "$year", budget.Year);
+        AddParam(cmd, "$month", budget.Month);
+        AddParam(cmd, "$limit", budget.LimitMinor);
+        AddParam(cmd, "$currency", budget.CurrencyCode);
+        AddParam(cmd, "$note", (object?)budget.Note ?? DBNull.Value);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    public bool DeleteBudget(long budgetId)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM budgets WHERE id = $id;";
+        AddParam(cmd, "$id", budgetId);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
     private void EnsureSchema()
     {
         Execute(@"
@@ -337,6 +417,22 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
                 FOREIGN KEY (account_id) REFERENCES accounts(id)
             );
+
+            CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY,
+                category_account_id INTEGER NOT NULL,
+                category_account_code TEXT,
+                name TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                limit_minor INTEGER NOT NULL,
+                currency_code TEXT NOT NULL,
+                note TEXT,
+                FOREIGN KEY (category_account_id) REFERENCES accounts(id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_budgets_scope
+                ON budgets(category_account_id, year, month);
 
             CREATE INDEX IF NOT EXISTS idx_postings_tx ON postings(transaction_id);
             CREATE INDEX IF NOT EXISTS idx_postings_acct ON postings(account_id);
@@ -408,6 +504,34 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 CategoryAccountCode = code
             };
             AddRule(rule);
+        }
+
+        var seedBudgets = new (string Name, int Year, int Month, string AccountCode, long LimitMinor)[]
+        {
+            ("January salary target", 2025, 1, "4000", 1500_00L),
+            ("January groceries cap", 2025, 1, "5000", 250_00L),
+            ("January dining cap", 2025, 1, "5100", 80_00L),
+            ("January coffee cap", 2025, 1, "5200", 25_00L),
+            ("January transport cap", 2025, 1, "5300", 90_00L),
+            ("January utilities cap", 2025, 1, "5400", 250_00L),
+            ("January subscriptions cap", 2025, 1, "5500", 15_00L),
+            ("January clothing cap", 2025, 1, "5600", 60_00L)
+        };
+
+        foreach (var (name, year, month, code, limit) in seedBudgets)
+        {
+            var budget = new Budget
+            {
+                Name = name,
+                Year = year,
+                Month = month,
+                CategoryAccountId = AccountId(code),
+                CategoryAccountCode = code,
+                LimitMinor = limit,
+                CurrencyCode = "USD",
+                Note = $"Seeded budget for {code} ({name})."
+            };
+            AddBudget(budget);
         }
     }
 

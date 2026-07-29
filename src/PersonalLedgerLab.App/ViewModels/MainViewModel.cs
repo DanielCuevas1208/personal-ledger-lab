@@ -31,6 +31,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _previewReference = string.Empty;
     private string _previewResult = "Enter a description to test the active rules.";
 
+    private string _budgetName = string.Empty;
+    private Account? _budgetCategoryAccount;
+    private int _budgetYear = 2025;
+    private int _budgetMonth = 1;
+    private decimal _budgetLimitMajor = 100m;
+    private long? _editingBudgetId;
+    private string _budgetNote = string.Empty;
+
     public MainViewModel() : this(new LedgerService(null!)) { }
 
     public MainViewModel(LedgerService service)
@@ -43,6 +51,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         DeleteRuleCommand = new RelayCommand(ExecuteDeleteRule, () => EditingRuleId.HasValue);
         PreviewCommand = new RelayCommand(ExecutePreview, () => true);
         ClearImportPathCommand = new RelayCommand(() => ImportFilePath = string.Empty);
+        SaveBudgetCommand = new RelayCommand(ExecuteSaveBudget, CanSaveBudget);
+        DeleteBudgetCommand = new RelayCommand(ExecuteDeleteBudget, () => EditingBudgetId.HasValue);
+        ExportBudgetsCommand = new RelayCommand(ExecuteExportBudgets, () => Budgets.Count > 0);
+        ExportBudgetVarianceCommand = new RelayCommand(ExecuteExportBudgetVariance, () => Transactions.Count > 0 && Budgets.Count > 0);
 
         Status = _service.StartupReport();
         Load();
@@ -55,6 +67,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<MonthlyTotalRow> MonthlyTotals { get; } = new();
     public ObservableCollection<Account> CategoryAccounts { get; } = new();
     public ObservableCollection<AccountRow> AssetAccounts { get; } = new();
+    public ObservableCollection<BudgetRow> Budgets { get; } = new();
+    public ObservableCollection<BudgetVarianceRow> BudgetVariance { get; } = new();
 
     public ICommand ImportCommand { get; }
     public ICommand ExportLedgerCommand { get; }
@@ -63,6 +77,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand DeleteRuleCommand { get; }
     public ICommand PreviewCommand { get; }
     public ICommand ClearImportPathCommand { get; }
+    public ICommand SaveBudgetCommand { get; }
+    public ICommand DeleteBudgetCommand { get; }
+    public ICommand ExportBudgetsCommand { get; }
+    public ICommand ExportBudgetVarianceCommand { get; }
 
     public AccountRow? SelectedAssetAccount
     {
@@ -171,6 +189,50 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set { _previewResult = value; OnPropertyChanged(); }
     }
 
+    public string BudgetName
+    {
+        get => _budgetName;
+        set { _budgetName = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public Account? BudgetCategoryAccount
+    {
+        get => _budgetCategoryAccount;
+        set { _budgetCategoryAccount = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public int BudgetYear
+    {
+        get => _budgetYear;
+        set { _budgetYear = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public int BudgetMonth
+    {
+        get => _budgetMonth;
+        set { _budgetMonth = Math.Clamp(value, 0, 12); OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public decimal BudgetLimitMajor
+    {
+        get => _budgetLimitMajor;
+        set { _budgetLimitMajor = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string BudgetNote
+    {
+        get => _budgetNote;
+        set { _budgetNote = value; OnPropertyChanged(); }
+    }
+
+    public long? EditingBudgetId
+    {
+        get => _editingBudgetId;
+        set { _editingBudgetId = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string BudgetLimitLabel => $"{BudgetLimitMajor:0.00} {(BudgetCategoryAccount?.CurrencyCode ?? "USD")}";
+
     public IEnumerable<RuleMatchType> MatchTypes => Enum.GetValues(typeof(RuleMatchType)).Cast<RuleMatchType>();
 
     private void Load()
@@ -182,6 +244,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         MonthlyTotals.Clear();
         CategoryAccounts.Clear();
         AssetAccounts.Clear();
+        Budgets.Clear();
+        BudgetVariance.Clear();
 
         foreach (var account in _service.Accounts.OrderBy(a => a.Code))
         {
@@ -264,6 +328,41 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         Detail = $"Net worth: {NetWorthLabel}. Latest month {LatestMonthLabel}: " +
                  $"income {LatestMonthIncomeLabel}, expense {LatestMonthExpenseLabel}.";
+
+        foreach (var budget in _service.Budgets
+            .OrderBy(b => b.Year).ThenBy(b => b.Month).ThenBy(b => b.CategoryAccountCode))
+        {
+            var category = _service.Accounts.FirstOrDefault(a => a.Id == budget.CategoryAccountId);
+            Budgets.Add(new BudgetRow(
+                budget.Id,
+                budget.IsRecurring ? "recurring" : $"{budget.Year:D4}-{budget.Month:D2}",
+                budget.Name,
+                budget.CategoryAccountCode ?? category?.Code ?? "?",
+                category?.Name ?? "?",
+                category?.Type.ToString() ?? "?",
+                LedgerService.FormatMinor(budget.LimitMinor),
+                budget.CurrencyCode,
+                budget.Note ?? string.Empty));
+        }
+
+        var varianceRows = _service.BuildBudgetVariance();
+        foreach (var row in varianceRows)
+        {
+            BudgetVariance.Add(new BudgetVarianceRow(
+                $"{row.Year:D4}-{row.Month:D2}",
+                row.AccountCode,
+                row.AccountName,
+                row.AccountType.ToString(),
+                LedgerService.FormatMinor(row.LimitMinor),
+                LedgerService.FormatMinor(row.ActualMinor),
+                LedgerService.FormatMinor(row.VarianceMinor),
+                row.CurrencyCode,
+                row.Explanation));
+        }
+
+        if (BudgetCategoryAccount is null)
+            BudgetCategoryAccount = CategoryAccounts.FirstOrDefault();
+
         RefreshCommandState();
     }
 
@@ -382,6 +481,107 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         PreviewResult = $"Matched: {result.Matched}. {result.Explanation}";
     }
 
+    private bool CanSaveBudget() =>
+        !string.IsNullOrWhiteSpace(BudgetName) &&
+        BudgetCategoryAccount is not null &&
+        BudgetLimitMajor > 0m &&
+        BudgetYear >= 0 && BudgetMonth >= 0 && BudgetMonth <= 12;
+
+    private void ExecuteSaveBudget()
+    {
+        try
+        {
+            if (BudgetCategoryAccount is null) return;
+            long limitMinor = (long)Math.Round(BudgetLimitMajor * 100m, MidpointRounding.ToEven);
+            if (EditingBudgetId.HasValue)
+            {
+                _service.UpdateBudget(EditingBudgetId.Value, BudgetName, BudgetCategoryAccount.Id,
+                    BudgetYear, BudgetMonth, limitMinor, string.IsNullOrWhiteSpace(BudgetNote) ? null : BudgetNote);
+                Status = $"Updated budget {BudgetName}.";
+            }
+            else
+            {
+                var id = _service.AddBudget(BudgetName, BudgetCategoryAccount.Id,
+                    BudgetYear, BudgetMonth, limitMinor, string.IsNullOrWhiteSpace(BudgetNote) ? null : BudgetNote);
+                EditingBudgetId = id;
+                Status = $"Created budget {BudgetName} (id {id}).";
+            }
+            Load();
+        }
+        catch (Exception ex)
+        {
+            Status = "Save budget failed: " + ex.Message;
+        }
+    }
+
+    private void ExecuteDeleteBudget()
+    {
+        try
+        {
+            if (!EditingBudgetId.HasValue) return;
+            _service.DeleteBudget(EditingBudgetId.Value);
+            Status = "Budget deleted.";
+            ResetBudgetEditor();
+            Load();
+        }
+        catch (Exception ex)
+        {
+            Status = "Delete budget failed: " + ex.Message;
+        }
+    }
+
+    public void BeginEditBudget(BudgetRow row)
+    {
+        var budget = _service.Budgets.FirstOrDefault(b => b.Id == row.Id);
+        if (budget is null) return;
+        EditingBudgetId = budget.Id;
+        BudgetName = budget.Name;
+        BudgetYear = budget.Year;
+        BudgetMonth = budget.Month;
+        BudgetLimitMajor = budget.LimitMinor / 100m;
+        BudgetNote = budget.Note ?? string.Empty;
+        BudgetCategoryAccount = CategoryAccounts.FirstOrDefault(a => a.Id == budget.CategoryAccountId);
+    }
+
+    public void ResetBudgetEditor()
+    {
+        EditingBudgetId = null;
+        BudgetName = string.Empty;
+        BudgetYear = 2025;
+        BudgetMonth = 1;
+        BudgetLimitMajor = 100m;
+        BudgetNote = string.Empty;
+        BudgetCategoryAccount = CategoryAccounts.FirstOrDefault();
+    }
+
+    private void ExecuteExportBudgets()
+    {
+        try
+        {
+            string path = PromptSave("budgets-export.csv");
+            _service.ExportBudgets(path);
+            Status = $"Wrote budgets export to {path}.";
+        }
+        catch (Exception ex)
+        {
+            Status = "Budget export failed: " + ex.Message;
+        }
+    }
+
+    private void ExecuteExportBudgetVariance()
+    {
+        try
+        {
+            string path = PromptSave("budget-variance-export.csv");
+            _service.ExportBudgetVariance(path);
+            Status = $"Wrote budget variance export to {path}.";
+        }
+        catch (Exception ex)
+        {
+            Status = "Budget variance export failed: " + ex.Message;
+        }
+    }
+
     public void BeginEditRule(RuleRow row)
     {
         var rule = _service.Rules.FirstOrDefault(r => r.Id == row.Id);
@@ -416,6 +616,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         (ExportSummaryCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (SaveRuleCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (DeleteRuleCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (SaveBudgetCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (DeleteBudgetCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ExportBudgetsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ExportBudgetVarianceCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(BudgetLimitLabel));
     }
 
     private static string PromptSave(string defaultName) =>
@@ -437,6 +642,8 @@ public sealed record RuleRow(long Id, string Name, int Priority, string MatchTyp
 public sealed record TransactionRow(string Date, string Description, string Reference, string Postings, string Explanation);
 public sealed record SummaryRow(string Month, string AccountCode, string AccountName, string Type, string Net, string Currency);
 public sealed record MonthlyTotalRow(string Month, string Transactions, string Income, string Expense, string NetIncome);
+public sealed record BudgetRow(long Id, string Period, string Name, string AccountCode, string AccountName, string AccountType, string Limit, string Currency, string Note);
+public sealed record BudgetVarianceRow(string Month, string AccountCode, string AccountName, string AccountType, string Limit, string Actual, string Variance, string Currency, string Explanation);
 
 internal sealed class RelayCommand : ICommand
 {

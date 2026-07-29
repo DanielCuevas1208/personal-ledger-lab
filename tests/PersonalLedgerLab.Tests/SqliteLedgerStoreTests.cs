@@ -102,6 +102,48 @@ public class SqliteLedgerStoreTests : IDisposable
         Assert.False(reopened.IsFreshDatabase);
     }
 
+    [Fact]
+    public void Fresh_store_seeds_january_budgets()
+    {
+        var budgets = _store.LoadBudgets();
+        Assert.NotEmpty(budgets);
+        Assert.Contains(budgets, b => b.Year == 2025 && b.Month == 1 && b.CategoryAccountCode == "5000");
+        Assert.Contains(budgets, b => b.Year == 2025 && b.Month == 1 && b.CategoryAccountCode == "4000");
+    }
+
+    [Fact]
+    public void Add_update_delete_budget_persists()
+    {
+        var groceries = _store.LoadAccounts().First(a => a.Code == "5000");
+        var id = _store.AddBudget(new Budget
+        {
+            Name = "Test budget",
+            Year = 2025,
+            Month = 2,
+            CategoryAccountId = groceries.Id,
+            CategoryAccountCode = groceries.Code,
+            LimitMinor = 300_00L,
+            CurrencyCode = "USD",
+            Note = "test"
+        });
+        Assert.True(id > 0);
+
+        var stored = _store.LoadBudgets().Single(b => b.Id == id);
+        Assert.Equal(300_00L, stored.LimitMinor);
+        Assert.Equal(2025, stored.Year);
+        Assert.Equal(2, stored.Month);
+
+        stored.Name = "Test budget v2";
+        stored.LimitMinor = 275_00L;
+        Assert.True(_store.UpdateBudget(stored));
+        var after = _store.LoadBudgets().Single(b => b.Id == id);
+        Assert.Equal("Test budget v2", after.Name);
+        Assert.Equal(275_00L, after.LimitMinor);
+
+        Assert.True(_store.DeleteBudget(id));
+        Assert.DoesNotContain(_store.LoadBudgets(), b => b.Id == id);
+    }
+
     public void Dispose()
     {
         _store.Dispose();
