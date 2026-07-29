@@ -75,4 +75,52 @@ public class CsvExporterTests
         CsvExporter.ExportRules(rules, writer);
         Assert.Contains("\"Coffee, cold\"", sb.ToString());
     }
+
+    [Fact]
+    public void Budget_export_has_header_and_rows()
+    {
+        var accounts = new List<Account>
+        {
+            new(3, "5000", "Groceries", AccountType.Expense, "USD")
+        };
+        var budgets = new List<Budget>
+        {
+            new(1, 3, "5000", "Groceries cap", 2025, 1, 250_00L, "USD", "note")
+        };
+        var sb = new StringBuilder();
+        using var writer = new StringWriter(sb);
+        CsvExporter.ExportBudgets(budgets, accounts, writer);
+        var lines = sb.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("LimitMajor", lines[0]);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("Groceries", lines[1]);
+        Assert.Contains("250.00", lines[1]);
+        Assert.Contains("False", lines[1]);
+    }
+
+    [Fact]
+    public void Budget_variance_export_emits_explanation()
+    {
+        var rows = new List<BudgetVariance>
+        {
+            new()
+            {
+                Year = 2025, Month = 1,
+                AccountId = 3, AccountCode = "5000", AccountName = "Groceries", AccountType = AccountType.Expense,
+                LimitMinor = 250_00L, ActualMinor = 203_08L, VarianceMinor = -46_92L,
+                IsRecurring = false, CurrencyCode = "USD",
+                Explanation = "Spent 203.08 USD against a 250.00 USD limit for 5000 Groceries in 2025-01. The result is 46.92 USD under budget."
+            }
+        };
+        var sb = new StringBuilder();
+        using var writer = new StringWriter(sb);
+        CsvExporter.ExportBudgetVariance(rows, writer);
+        var csv = sb.ToString();
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("VarianceMajor", lines[0]);
+        Assert.Contains("5000", lines[1]);
+        Assert.Contains("-46.92", lines[1]);
+        Assert.Contains("under budget", lines[1]);
+    }
 }

@@ -52,6 +52,7 @@ public class MainWindow : Window
         tabs.Items.Add(new TabItem { Header = "Overview", Content = BuildOverview() });
         tabs.Items.Add(new TabItem { Header = "Import", Content = BuildImport() });
         tabs.Items.Add(new TabItem { Header = "Categorization rules", Content = BuildRules() });
+        tabs.Items.Add(new TabItem { Header = "Budgets", Content = BuildBudgets() });
         tabs.Items.Add(new TabItem { Header = "Monthly summary", Content = BuildSummary() });
 
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
@@ -261,6 +262,110 @@ public class MainWindow : Window
         wrapper.Children.Add(intro);
         wrapper.Children.Add(grid);
         return wrapper;
+    }
+
+    private Control BuildBudgets()
+    {
+        var editor = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 12, 0) };
+        editor.Children.Add(new TextBlock { Text = "Budget editor", FontWeight = FontWeight.Bold });
+
+        var name = new TextBox { Watermark = "Budget name" };
+        BindTo(name, TextBox.TextProperty, nameof(_vm.BudgetName));
+        editor.Children.Add(name);
+
+        var yearLabel = new TextBlock { Text = "Year", VerticalAlignment = VerticalAlignment.Center, Width = 60 };
+        var year = new NumericUpDown { Minimum = 0, Maximum = 9999, FormatString = "0" };
+        BindTo(year, NumericUpDown.ValueProperty, nameof(_vm.BudgetYear));
+        var monthLabel = new TextBlock { Text = "Month", VerticalAlignment = VerticalAlignment.Center, Width = 60 };
+        var month = new NumericUpDown { Minimum = 0, Maximum = 12, FormatString = "0" };
+        BindTo(month, NumericUpDown.ValueProperty, nameof(_vm.BudgetMonth));
+        var scopeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        scopeRow.Children.Add(yearLabel);
+        scopeRow.Children.Add(year);
+        scopeRow.Children.Add(monthLabel);
+        scopeRow.Children.Add(month);
+        editor.Children.Add(scopeRow);
+
+        var hint = new TextBlock
+        {
+            Text = "Use year 0 and month 0 for a recurring budget.",
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap
+        };
+        editor.Children.Add(hint);
+
+        var categoryLabel = new TextBlock { Text = "Category", VerticalAlignment = VerticalAlignment.Center, Width = 60 };
+        var categoryCombo = new ComboBox { Width = 280 };
+        categoryCombo.ItemTemplate = new FuncDataTemplate<Account>((a, _) => new TextBlock { Text = a?.Name });
+        categoryCombo.ItemsSource = _vm.CategoryAccounts;
+        BindTo(categoryCombo, SelectingItemsControl.SelectedItemProperty, nameof(_vm.BudgetCategoryAccount));
+        var categoryRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        categoryRow.Children.Add(categoryLabel);
+        categoryRow.Children.Add(categoryCombo);
+        editor.Children.Add(categoryRow);
+
+        var limitLabel = new TextBlock { Text = "Limit", VerticalAlignment = VerticalAlignment.Center, Width = 60 };
+        var limit = new NumericUpDown { Minimum = 0, Maximum = 1000000000, FormatString = "0.00" };
+        BindTo(limit, NumericUpDown.ValueProperty, nameof(_vm.BudgetLimitMajor));
+        var limitDisplay = new TextBlock { Opacity = 0.7 };
+        BindTo(limitDisplay, TextBlock.TextProperty, nameof(_vm.BudgetLimitLabel));
+        var limitRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        limitRow.Children.Add(limitLabel);
+        limitRow.Children.Add(limit);
+        limitRow.Children.Add(limitDisplay);
+        editor.Children.Add(limitRow);
+
+        var note = new TextBox { Watermark = "Note (optional)" };
+        BindTo(note, TextBox.TextProperty, nameof(_vm.BudgetNote));
+        editor.Children.Add(note);
+
+        var saveBtn = new Button { Content = "Save budget", Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x6F, 0xEB)), Foreground = Brushes.White };
+        BindTo(saveBtn, Button.CommandProperty, nameof(_vm.SaveBudgetCommand));
+        var delBtn = new Button { Content = "Delete" };
+        BindTo(delBtn, Button.CommandProperty, nameof(_vm.DeleteBudgetCommand));
+        var newBtn = new Button { Content = "New" };
+        newBtn.Click += (_, _) => _vm.ResetBudgetEditor();
+        var actionsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        actionsRow.Children.Add(saveBtn);
+        actionsRow.Children.Add(delBtn);
+        actionsRow.Children.Add(newBtn);
+        editor.Children.Add(actionsRow);
+
+        var exportRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+        var exportBudgets = new Button { Content = "Export budgets" };
+        BindTo(exportBudgets, Button.CommandProperty, nameof(_vm.ExportBudgetsCommand));
+        var exportVariance = new Button { Content = "Export variance" };
+        BindTo(exportVariance, Button.CommandProperty, nameof(_vm.ExportBudgetVarianceCommand));
+        exportRow.Children.Add(exportBudgets);
+        exportRow.Children.Add(exportVariance);
+        editor.Children.Add(exportRow);
+
+        var right = new Grid { RowDefinitions = new RowDefinitions("*,*"), Margin = new Thickness(0) };
+        var budgetsGrid = NewGrid(nameof(_vm.Budgets));
+        budgetsGrid.DoubleTapped += BudgetsGrid_DoubleTapped;
+        Grid.SetRow(budgetsGrid, 0);
+        var varianceIntro = new TextBlock { Text = "Budget variance per month", FontWeight = FontWeight.Bold, Opacity = 0.8 };
+        var varianceGrid = NewGrid(nameof(_vm.BudgetVariance));
+        var variancePanel = new StackPanel { Spacing = 4, Margin = new Thickness(0,0,0,0) };
+        variancePanel.Children.Add(varianceIntro);
+        variancePanel.Children.Add(varianceGrid);
+        Grid.SetRow(variancePanel, 1);
+        right.Children.Add(budgetsGrid);
+        right.Children.Add(variancePanel);
+        Grid.SetColumn(right, 1);
+
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("2*,3*"),
+            Margin = new Thickness(8),
+            Children = { editor, right }
+        };
+    }
+
+    private void BudgetsGrid_DoubleTapped(object? sender, RoutedEventArgs e)
+    {
+        if (sender is DataGrid grid && grid.SelectedItem is BudgetRow row)
+            _vm.BeginEditBudget(row);
     }
 
     private DataGrid NewGrid(string itemsPath)

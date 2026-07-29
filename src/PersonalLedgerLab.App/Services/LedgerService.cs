@@ -24,6 +24,7 @@ public sealed class LedgerService
     public IReadOnlyList<Account> Accounts { get; private set; } = Array.Empty<Account>();
     public IReadOnlyList<CategoryRule> Rules { get; private set; } = Array.Empty<CategoryRule>();
     public IReadOnlyList<Transaction> Transactions { get; private set; } = Array.Empty<Transaction>();
+    public IReadOnlyList<Budget> Budgets { get; private set; } = Array.Empty<Budget>();
 
     public bool IsFreshDatabase => _store.IsFreshDatabase;
     public string DatabasePath => _store.DatabasePath;
@@ -46,6 +47,7 @@ public sealed class LedgerService
         Accounts = _store.LoadAccounts();
         Rules = _store.LoadRules();
         Transactions = _store.LoadTransactions();
+        Budgets = _store.LoadBudgets();
     }
 
     public StatementImportResult ImportStatement(string csvPath, long bankAccountId)
@@ -169,6 +171,55 @@ public sealed class LedgerService
         return engine.Categorize(draft, Rules);
     }
 
+    public long AddBudget(string name, long categoryAccountId, int year, int month, long limitMinor, string? note)
+    {
+        var account = Accounts.First(a => a.Id == categoryAccountId);
+        var budget = new Budget
+        {
+            Name = name,
+            CategoryAccountId = categoryAccountId,
+            CategoryAccountCode = account.Code,
+            Year = year,
+            Month = month,
+            LimitMinor = limitMinor,
+            CurrencyCode = account.CurrencyCode,
+            Note = note
+        };
+        var id = _store.AddBudget(budget);
+        RefreshCache();
+        return id;
+    }
+
+    public bool UpdateBudget(long id, string name, long categoryAccountId, int year, int month, long limitMinor, string? note)
+    {
+        var account = Accounts.First(a => a.Id == categoryAccountId);
+        var budget = new Budget
+        {
+            Id = id,
+            Name = name,
+            CategoryAccountId = categoryAccountId,
+            CategoryAccountCode = account.Code,
+            Year = year,
+            Month = month,
+            LimitMinor = limitMinor,
+            CurrencyCode = account.CurrencyCode,
+            Note = note
+        };
+        var ok = _store.UpdateBudget(budget);
+        RefreshCache();
+        return ok;
+    }
+
+    public bool DeleteBudget(long id)
+    {
+        var ok = _store.DeleteBudget(id);
+        RefreshCache();
+        return ok;
+    }
+
+    public IReadOnlyList<BudgetVariance> BuildBudgetVariance(string currency = "USD") =>
+        BudgetService.Build(BuildSummary(currency), Budgets, Accounts, currency);
+
     public void ExportLedger(string path)
     {
         using var writer = new StreamWriter(path, false, Encoding.UTF8);
@@ -179,6 +230,18 @@ public sealed class LedgerService
     {
         using var writer = new StreamWriter(path, false, Encoding.UTF8);
         CsvExporter.ExportSummary(BuildSummary(), writer);
+    }
+
+    public void ExportBudgets(string path)
+    {
+        using var writer = new StreamWriter(path, false, Encoding.UTF8);
+        CsvExporter.ExportBudgets(Budgets, Accounts, writer);
+    }
+
+    public void ExportBudgetVariance(string path)
+    {
+        using var writer = new StreamWriter(path, false, Encoding.UTF8);
+        CsvExporter.ExportBudgetVariance(BuildBudgetVariance(), writer);
     }
 
     public string StartupReport()

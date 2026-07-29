@@ -58,6 +58,46 @@ public class EndToEndTests : IDisposable
     }
 
     [Fact]
+    public void Seeded_budgets_explain_variance_for_sample_month()
+    {
+        var accounts = _store.LoadAccounts();
+        var rules = _store.LoadRules();
+        var budgets = _store.LoadBudgets();
+        var bank = accounts.First(a => a.Code == "1000");
+        var suspense = accounts.First(a => a.Code == "3999");
+        var byId = accounts.ToDictionary(a => a.Id);
+
+        var rows = new CsvStatementImporter().ReadFile(SamplePath);
+        var book = new LedgerBook();
+        foreach (var a in accounts)
+            book.AddAccount(a);
+
+        new LedgerImportRunner().Import(book, bank, suspense, rows, rules, byId);
+        foreach (var tx in book.Transactions)
+            _store.SaveTransaction(tx);
+
+        var summaries = SummaryService.Build(_store.LoadTransactions(), accounts, "USD");
+        var variance = BudgetService.Build(summaries, budgets, accounts, "USD");
+
+        Assert.NotEmpty(variance);
+        var salary = variance.Single(v => v.AccountCode == "4000");
+        Assert.Equal(1500_00L, salary.LimitMinor);
+        Assert.Equal(1500_00L, salary.ActualMinor);
+        Assert.Equal(0L, salary.VarianceMinor);
+
+        var groceries = variance.Single(v => v.AccountCode == "5000");
+        Assert.Equal(250_00L, groceries.LimitMinor);
+        Assert.Equal(203_08L, groceries.ActualMinor);
+        Assert.Equal(203_08L - 250_00L, groceries.VarianceMinor);
+
+        var transport = variance.Single(v => v.AccountCode == "5300");
+        Assert.Equal(100_15L, transport.ActualMinor);
+        Assert.True(transport.VarianceMinor > 0);
+        Assert.Contains("over budget", transport.Explanation);
+        Assert.Contains("under budget", groceries.Explanation);
+    }
+
+    [Fact]
     public void Sample_import_attaches_rule_explanations()
     {
         var accounts = _store.LoadAccounts();

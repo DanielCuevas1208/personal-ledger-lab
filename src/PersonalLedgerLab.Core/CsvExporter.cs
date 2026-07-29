@@ -113,6 +113,60 @@ public static class CsvExporter
         }
     }
 
+    /// <summary>
+    /// Writes the budget table.
+    /// </summary>
+    public static void ExportBudgets(IReadOnlyList<Budget> budgets, IReadOnlyList<Account> accounts, TextWriter writer)
+    {
+        if (writer is null) throw new ArgumentNullException(nameof(writer));
+        var accountsById = accounts.ToDictionary(a => a.Id);
+        writer.WriteLine("Id,Year,Month,Name,AccountCode,AccountName,AccountType,LimitMinor,LimitMajor,Currency,Recurring,Note");
+
+        foreach (var budget in budgets.OrderBy(b => b.Year).ThenBy(b => b.Month).ThenBy(b => b.CategoryAccountCode))
+        {
+            accountsById.TryGetValue(budget.CategoryAccountId, out var account);
+            writer.WriteLine(string.Join(',',
+                budget.Id,
+                budget.Year,
+                budget.Month,
+                Csv(budget.Name),
+                Csv(account?.Code ?? budget.CategoryAccountCode ?? string.Empty),
+                Csv(account?.Name ?? string.Empty),
+                account?.Type.ToString() ?? string.Empty,
+                budget.LimitMinor,
+                (budget.LimitMinor / 100m).ToString("0.00", CultureInfo.InvariantCulture),
+                Csv(budget.CurrencyCode),
+                budget.IsRecurring,
+                Csv(budget.Note ?? string.Empty)));
+        }
+    }
+
+    /// <summary>
+    /// Writes one variance row per budget that matched a month.
+    /// </summary>
+    public static void ExportBudgetVariance(IReadOnlyList<BudgetVariance> rows, TextWriter writer)
+    {
+        if (writer is null) throw new ArgumentNullException(nameof(writer));
+        writer.WriteLine("Year,Month,AccountCode,AccountName,AccountType,LimitMinor,ActualMinor,VarianceMinor,VarianceMajor,Currency,Recurring,Explanation");
+
+        foreach (var row in rows.OrderBy(r => r.Year).ThenBy(r => r.Month).ThenBy(r => r.AccountCode))
+        {
+            writer.WriteLine(string.Join(',',
+                row.Year,
+                row.Month,
+                Csv(row.AccountCode),
+                Csv(row.AccountName),
+                row.AccountType,
+                row.LimitMinor,
+                row.ActualMinor,
+                row.VarianceMinor,
+                (row.VarianceMinor / 100m).ToString("0.00", CultureInfo.InvariantCulture),
+                Csv(row.CurrencyCode),
+                row.IsRecurring,
+                Csv(row.Explanation)));
+        }
+    }
+
     private static string Csv(string? value)
     {
         if (string.IsNullOrEmpty(value))

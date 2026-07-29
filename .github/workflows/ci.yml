@@ -31,7 +31,7 @@ jobs:
         run: dotnet restore PersonalLedgerLab.sln
 
       - name: Build
-        run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore
+        run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore -warnaserror
 
       - name: Test
         run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build --logger "console;verbosity=normal"
