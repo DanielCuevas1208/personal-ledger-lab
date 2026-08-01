@@ -1,11 +1,12 @@
 # Personal Ledger Lab
 
-A local-first finance tracker. It imports statement files, applies transparent
-categorization rules, and explains every balance and spending summary.
+Personal Ledger Lab is a local-first finance tracker. It imports statement
+files, applies categorization rules, and explains each balance and spending
+summary.
 
-The data stays on your machine. The application uses a SQLite database and a
-double-entry model. No account connects to the internet, and no secret is
-needed to run the demo or the tests.
+The data stays on the local machine. The application uses SQLite and a
+double-entry model. It does not connect to the internet. The demo and tests do
+not need a secret.
 
 ## What this release does
 
@@ -24,9 +25,8 @@ This release ships a coherent offline loop and a budget layer:
 ## Architecture
 
 The solution has four projects. The domain logic has no database or user-interface
-dependency. The data layer implements the persistence interface. The desktop
-interface calls only the application service, so the storage and the rules stay
-isolated.
+dependency. The data layer provides persistence. The desktop interface calls
+the application service. This keeps storage and rules separate.
 
 ```text
 PersonalLedgerLab.Core      Domain model, rules, import, export, summaries, budgets.
