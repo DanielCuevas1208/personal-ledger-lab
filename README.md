@@ -12,8 +12,8 @@ not need a secret.
 
 This release ships a coherent offline loop and a budget layer:
 
-- Import a bundled CSV bank statement.
-- Reconcile the statement running balance against the replayed ledger.
+- Import a bundled CSV or OFX bank statement.
+- Auto-detect the statement format or choose CSV or OFX.
 - Apply categorization rules that explain each decision in plain language.
 - Edit the chart of accounts and the categorization rules.
 - Set a monthly or recurring budget target per category account.
@@ -29,7 +29,7 @@ dependency. The data layer provides persistence. The desktop interface calls
 the application service. This keeps storage and rules separate.
 
 ```text
-PersonalLedgerLab.Core      Domain model, rules, import, export, summaries, budgets.
+PersonalLedgerLab.Core      Domain model, adapters, rules, export, summaries, budgets.
 PersonalLedgerLab.Data      SQLite persistence of the Core model.
 PersonalLedgerLab.App       Avalonia desktop interface and the service facade.
 PersonalLedgerLab.Tests     Deterministic xUnit tests for the core behavior.
@@ -37,6 +37,17 @@ PersonalLedgerLab.Tests     Deterministic xUnit tests for the core behavior.
 
 The dependency flow is one way. Core depends on nothing. Data depends on Core.
 App depends on Core and Data. Tests depend on all three.
+
+## Statement adapters
+
+The import boundary uses one shared row model. Each adapter parses source fields into that model.
+
+- CSV accepts common date, description, amount, debit, credit, balance, and reference headers.
+- OFX accepts common 1.x SGML and 2.x XML bank transaction documents.
+- Auto detection checks the file contents before parsing.
+- CSV replays row balances. OFX uses its closing balance and labels the inferred opening balance.
+
+The ledger runner receives the same statement object from every adapter. Categorization and persistence do not depend on the source format.
 
 ## Double-entry model
 
@@ -91,7 +102,7 @@ You need the .NET 8 SDK. The desktop interface uses Avalonia 11. Restore the
 packages, then build the solution.
 
 ```pwsh
-dotnet restore PersonalLedgerLab.sln
+dotnet restore PersonalLedgerLab.sln --locked-mode
 dotnet build PersonalLedgerLab.sln --configuration Release
 ```
 
@@ -106,8 +117,8 @@ dotnet run --project src/PersonalLedgerLab.App/PersonalLedgerLab.App.csproj
 Set the `PERSONAL_LEDGER_DB` environment variable to use a different database
 path, for example a file in your project folder for a clean demo run.
 
-Run the tests. Sixty-six deterministic tests cover the core behavior, the
-budgets, and the SQLite persistence.
+Run the tests. Seventy-two deterministic tests cover the core behavior, the
+adapters, the budgets, and the SQLite persistence.
 
 ```pwsh
 dotnet test PersonalLedgerLab.sln
@@ -116,11 +127,10 @@ dotnet test PersonalLedgerLab.sln
 ## Using the desktop interface
 
 Open the Import tab. Pick the bank account, which is the seeded Checking asset.
-Use Browse to select `samples/statements/sample-statement.csv`. Choose Import.
-The status line reports the transaction count, the opening and closing balance,
-and whether the statement reconciles.
+Select Auto, CSV, or OFX in Format. Use Browse to choose a statement file.
+Choose Import. The status line reports the format, balances, and reconciliation result.
 
-Open the Categorization rules tab. The inflation-left panel edits a rule.
+Open the Categorization rules tab. The left panel edits a rule.
 Double-click a row to load it. Use the preview box to test a description against
 the active rules before you save the rule.
 
@@ -134,9 +144,12 @@ each month. Use the Export buttons to write the budgets or the variance to CSV.
 
 ## Sample data
 
-The bundled statement is `samples/statements/sample-statement.csv`. It has
-fifteen rows for January 2025. The opening balance is 1000.00 USD. The closing
-balance is 1807.48 USD.
+The CSV sample is `samples/statements/sample-statement.csv`. It has fifteen
+rows for January 2025. The opening balance is 1000.00 USD. The closing balance
+is 1807.48 USD.
+
+The OFX sample is `samples/statements/sample-statement.ofx`. It has two rows.
+Its closing balance is 2415.63 USD. The importer infers its 1000.00 USD opening balance.
 
 The seeded chart of accounts uses these codes:
 
@@ -174,8 +187,16 @@ The seeded budgets set January 2025 targets for each seeded category:
 After the sample import, the status line reads:
 
 ```text
-Imported 15 transactions. Opening 1000.00 closing 1807.48. Reconciles: True.
+Imported 15 CSV transactions. Opening 1000.00 closing 1807.48. Reconciles: True.
 ```
+
+The OFX sample produces this status line:
+
+```text
+Imported 2 OFX transactions. Opening 1000.00 closing 2415.63. Reconciles: True. The opening balance was inferred from the closing balance and transaction total.
+```
+
+The warning makes the OFX balance assumption visible in the demo.
 
 The monthly summary for January 2025 has these account totals:
 
@@ -233,7 +254,8 @@ for this run and are listed in the roadmap:
 
 - Single-currency ledgers. The schema stores currency per posting, but the
   summary and the import in this release assume one currency per file.
-- One statement format. The importer reads six columns in a fixed order.
+- CSV uses comma-separated files. Header aliases cover common bank exports.
+- OFX covers bank transaction rows, not investments or images.
 - Budgets track one category per row and one month per row. They do not roll
   over, they do not forecast, and they do not set envelope balances.
 - No multi-user data or sync. The data file is for one local profile.
@@ -243,17 +265,16 @@ for this run and are listed in the roadmap:
 
 ## Test status
 
-Sixty-six deterministic tests pass. They cover money math, ledger balance,
-the rule engine, the CSV parser, statement reconciliation, the budget service,
-budget persistence, CSV export, SQLite persistence, and an end-to-end run of
-the sample file with variance.
+Seventy-two deterministic tests pass. They cover money math, ledger balance,
+the rule engine, CSV aliases, OFX parsing, statement reconciliation, budgets,
+CSV export, SQLite persistence, and both sample statement pipelines.
 
 ```text
-Passed!  - Failed: 0, Passed: 66, Skipped: 0, Total: 66
+Passed!  - Failed: 0, Passed: 72, Skipped: 0, Total: 72
 ```
 
-The CI workflow builds and tests the solution on Windows and Linux. Package
-versions are pinned exactly in each csproj, so a restore is reproducible.
+The CI workflow builds and tests the solution on Windows and Linux.
+Package versions are pinned exactly in each csproj. Lockfiles make the restore reproducible.
 
 ## Roadmap
 
@@ -264,7 +285,7 @@ ships as one coherent release.
    CSV export, and SQLite persistence.
 2. Done: monthly and recurring budgets per category, a variance report, and
    budget and variance CSV export.
-3. Statement adapters: add more bank CSV formats and an OFX reader.
+3. Done: CSV header aliases, format auto-detection, and an OFX bank statement reader.
 4. Multi-currency: add exchange rates at posting time and a consolidated view.
 5. Scheduled transactions: add recurring entries that generate postings.
 6. Reports: add a net-worth chart, a category trend chart, and a print view.

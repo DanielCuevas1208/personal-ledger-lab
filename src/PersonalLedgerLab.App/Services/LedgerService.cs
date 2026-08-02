@@ -13,7 +13,7 @@ public sealed class LedgerService
 {
     private readonly ILedgerStore _store;
     private readonly LedgerImportRunner _importRunner = new();
-    private readonly CsvStatementImporter _importer = new();
+    private readonly StatementImporterRegistry _importers = new();
 
     public LedgerService(ILedgerStore store)
     {
@@ -50,33 +50,24 @@ public sealed class LedgerService
         Budgets = _store.LoadBudgets();
     }
 
-    public StatementImportResult ImportStatement(string csvPath, long bankAccountId)
+    public StatementImportResult ImportStatement(string csvPath, long bankAccountId) =>
+        ImportStatement(csvPath, bankAccountId, StatementFormat.Auto);
+
+    public StatementImportResult ImportStatement(string statementPath, long bankAccountId, StatementFormat format)
     {
         var bankAccount = Accounts.First(a => a.Id == bankAccountId);
         var suspense = Accounts.First(a => a.Code == "3999");
         var categoryById = Accounts.ToDictionary(a => a.Id);
-
-        var rows = _importer.ReadFile(csvPath);
+        var statement = _importers.ReadFile(statementPath, format);
 
         var book = new LedgerBook();
         foreach (var account in Accounts)
             book.AddAccount(account);
 
-        var import = new ImportedLedger
-        {
-            Book = book,
-            Bank = bankAccount,
-            Suspense = suspense,
-            Rows = rows,
-            Rules = Rules,
-            Categories = categoryById
-        };
-
         var result = _importRunner.Import(
-            import.Book, import.Bank, import.Suspense,
-            import.Rows, import.Rules, import.Categories);
+            book, bankAccount, suspense, statement, Rules, categoryById);
 
-        foreach (var tx in import.Book.Transactions)
+        foreach (var tx in book.Transactions)
             _store.SaveTransaction(tx);
 
         RefreshCache();
@@ -256,14 +247,4 @@ public sealed class LedgerService
 
     public static string FormatMinor(long minor) =>
         (minor / 100m).ToString("0.00", CultureInfo.InvariantCulture);
-
-    private sealed class ImportedLedger
-    {
-        public LedgerBook Book { get; set; } = new();
-        public Account Bank { get; set; } = null!;
-        public Account Suspense { get; set; } = null!;
-        public IReadOnlyList<ImportedRow> Rows { get; set; } = Array.Empty<ImportedRow>();
-        public IReadOnlyList<CategoryRule> Rules { get; set; } = Array.Empty<CategoryRule>();
-        public IReadOnlyDictionary<long, Account> Categories { get; set; } = new Dictionary<long, Account>();
-    }
 }

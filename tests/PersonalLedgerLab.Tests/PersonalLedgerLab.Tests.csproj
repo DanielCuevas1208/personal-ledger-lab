@@ -31,6 +31,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>samples\sample-statement.csv</Link>
     </Content>
+    <Content Include="..\..\samples\statements\sample-statement.ofx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>samples\sample-statement.ofx</Link>
+    </Content>
   </ItemGroup>
 
 </Project>
