@@ -127,7 +127,10 @@ public class MainWindow : Window
         bankCombo.ItemTemplate = new FuncDataTemplate<Account>((a, _) => new TextBlock { Text = a?.Code });
         bankCombo.ItemsSource = _vm.AssetAccounts;
         BindTo(bankCombo, SelectingItemsControl.SelectedItemProperty, nameof(_vm.SelectedAssetAccount));
-
+        var formatLabel = new TextBlock { Text = "Format:", VerticalAlignment = VerticalAlignment.Center, Width = 52 };
+        var formatCombo = new ComboBox { Width = 120 };
+        formatCombo.ItemsSource = _vm.ImportFormats.ToList();
+        BindTo(formatCombo, SelectingItemsControl.SelectedItemProperty, nameof(_vm.ImportFormat));
         var fileLabel = new TextBlock { Text = "Statement file:", VerticalAlignment = VerticalAlignment.Center, Width = 90 };
         var fileBox = new TextBox { Width = 420 };
         BindTo(fileBox, TextBox.TextProperty, nameof(_vm.ImportFilePath));
@@ -148,6 +151,8 @@ public class MainWindow : Window
         var row0 = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8) };
         row0.Children.Add(bankLabel);
         row0.Children.Add(bankCombo);
+        row0.Children.Add(formatLabel);
+        row0.Children.Add(formatCombo);
         Grid.SetRow(row0, 0);
         var row1 = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8) };
         row1.Children.Add(fileLabel);
@@ -392,11 +397,12 @@ public class MainWindow : Window
         if (top is null) return;
         var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Select a CSV statement",
+            Title = "Select a statement file",
             AllowMultiple = false,
             FileTypeFilter = new List<FilePickerFileType>
             {
                 new("CSV files") { Patterns = new[] { "*.csv" } },
+                new("OFX files") { Patterns = new[] { "*.ofx", "*.qfx" } },
                 new("All files") { Patterns = new[] { "*.*" } }
             }
         });

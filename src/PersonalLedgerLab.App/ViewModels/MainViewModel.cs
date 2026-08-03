@@ -15,6 +15,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _status = string.Empty;
     private string _detail = string.Empty;
     private string _importFilePath = string.Empty;
+    private StatementFormat _importFormat = StatementFormat.Auto;
     private long _netWorthMinor;
     private long _latestMonthIncomeMinor;
     private long _latestMonthExpenseMinor;
@@ -92,6 +93,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _importFilePath;
         set { _importFilePath = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public StatementFormat ImportFormat
+    {
+        get => _importFormat;
+        set { _importFormat = value; OnPropertyChanged(); RefreshCommandState(); }
     }
 
     public string Status
@@ -232,6 +239,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public string BudgetLimitLabel => $"{BudgetLimitMajor:0.00} {(BudgetCategoryAccount?.CurrencyCode ?? "USD")}";
+
+    public IEnumerable<StatementFormat> ImportFormats => Enum.GetValues<StatementFormat>();
 
     public IEnumerable<RuleMatchType> MatchTypes => Enum.GetValues(typeof(RuleMatchType)).Cast<RuleMatchType>();
 
@@ -377,8 +386,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
             var bank = _service.AssetAccounts.FirstOrDefault(a => a.Code == SelectedAssetAccount.Code)
                        ?? _service.Accounts.First(a => a.Code == SelectedAssetAccount.Code);
-            var result = _service.ImportStatement(ImportFilePath, bank.Id);
-            Status = $"Imported {result.TransactionCount} transactions. " +
+            var result = _service.ImportStatement(ImportFilePath, bank.Id, ImportFormat);
+            Status = $"Imported {result.TransactionCount} {result.FormatName} transactions. " +
                      $"Opening {LedgerService.FormatMinor(result.OpeningBalanceMinor)} " +
                      $"closing {LedgerService.FormatMinor(result.ActualClosingBalanceMinor)}. " +
                      $"Reconciles: {result.Reconciles}.";

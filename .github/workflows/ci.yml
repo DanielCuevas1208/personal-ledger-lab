@@ -28,13 +28,13 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore PersonalLedgerLab.sln
+        run: dotnet restore PersonalLedgerLab.sln --locked-mode
 
       - name: Build
-        run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore -warnaserror
+        run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore -warnaserror -m:1
 
       - name: Test
-        run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build --logger "console;verbosity=normal"
+        run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build -m:1 --logger "console;verbosity=normal"
 
       - name: Upload test results
         if: always()

@@ -17,6 +17,9 @@ public class EndToEndTests : IDisposable
     private static string SamplePath =>
         Path.Combine(AppContext.BaseDirectory, "samples", "sample-statement.csv");
 
+    private static string OfxSamplePath =>
+        Path.Combine(AppContext.BaseDirectory, "samples", "sample-statement.ofx");
+
     [Fact]
     public void Sample_statement_import_balance_and_summary_match()
     {
@@ -114,6 +117,30 @@ public class EndToEndTests : IDisposable
         var salaryTx = book.Transactions.Single(t => t.Description.StartsWith("Salary"));
         Assert.NotNull(salaryTx.AppliedRuleId);
         Assert.Contains("Salary", salaryTx.RuleExplanation!);
+    }
+
+    [Fact]
+    public void Sample_ofx_import_uses_the_same_ledger_pipeline()
+    {
+        var accounts = _store.LoadAccounts();
+        var rules = _store.LoadRules();
+        var bank = accounts.First(a => a.Code == "1000");
+        var suspense = accounts.First(a => a.Code == "3999");
+        var statement = new StatementImporterRegistry().ReadFile(OfxSamplePath);
+        var book = new LedgerBook();
+        foreach (var account in accounts)
+            book.AddAccount(account);
+
+        var result = new LedgerImportRunner().Import(
+            book, bank, suspense, statement, rules, accounts.ToDictionary(a => a.Id));
+
+        Assert.Equal("OFX", result.FormatName);
+        Assert.Equal(2, result.TransactionCount);
+        Assert.True(result.Reconciles);
+        Assert.Equal(1000_00L, result.OpeningBalanceMinor);
+        Assert.Equal(2415_63L, result.ActualClosingBalanceMinor);
+        Assert.Contains(result.Warnings, warning => warning.Contains("inferred", StringComparison.OrdinalIgnoreCase));
+        Assert.All(book.Transactions, transaction => Assert.Equal("ofx-import", transaction.Source));
     }
 
     public void Dispose()
