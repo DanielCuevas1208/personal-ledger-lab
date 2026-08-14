@@ -167,6 +167,30 @@ public static class CsvExporter
         }
     }
 
+    /// <summary>
+    /// Writes consolidated balances in the ledger base currency.
+    /// </summary>
+    public static void ExportConsolidatedBalances(ConsolidatedBalanceReport report, TextWriter writer)
+    {
+        if (writer is null) throw new ArgumentNullException(nameof(writer));
+        writer.WriteLine("AsOfDate,AccountCode,AccountName,AccountType,NativeBalanceMinor,NativeCurrency,BaseBalanceMinor,BaseCurrency,ExchangeRatePpm,Explanation");
+
+        foreach (var row in report.Accounts)
+        {
+            writer.WriteLine(string.Join(',',
+                report.AsOfDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Csv(row.AccountCode),
+                Csv(row.AccountName),
+                row.AccountType,
+                row.NativeBalanceMinor,
+                Csv(row.NativeCurrencyCode),
+                row.BaseBalanceMinor,
+                Csv(row.BaseCurrencyCode),
+                row.ExchangeRatePpm?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                Csv(row.Explanation)));
+        }
+    }
+
     private static string Csv(string? value)
     {
         if (string.IsNullOrEmpty(value))

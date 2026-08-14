@@ -23,6 +23,7 @@ public sealed class StatementImportResult
 public sealed class LedgerImportRunner
 {
     private readonly RuleEngine _engine = new();
+    private readonly ExchangeRateService _exchangeRates = new();
 
     /// <summary>
     /// Converts rows into balanced transactions attached to <paramref name="book"/>.
@@ -34,13 +35,14 @@ public sealed class LedgerImportRunner
         Account suspenseAccount,
         IReadOnlyList<ImportedRow> rows,
         IReadOnlyList<CategoryRule> rules,
-        IReadOnlyDictionary<long, Account> categoryAccountsById) =>
+        IReadOnlyDictionary<long, Account> categoryAccountsById,
+        IReadOnlyList<ExchangeRate> exchangeRates) =>
         Import(book, bankAccount, suspenseAccount, new ImportedStatement
         {
             FormatName = "CSV",
             Source = "csv-import",
             Rows = rows
-        }, rules, categoryAccountsById);
+        }, rules, categoryAccountsById, exchangeRates);
 
     /// <summary>
     /// Converts an adapter result into balanced ledger transactions.
@@ -51,13 +53,15 @@ public sealed class LedgerImportRunner
         Account suspenseAccount,
         ImportedStatement statement,
         IReadOnlyList<CategoryRule> rules,
-        IReadOnlyDictionary<long, Account> categoryAccountsById)
+        IReadOnlyDictionary<long, Account> categoryAccountsById,
+        IReadOnlyList<ExchangeRate> exchangeRates)
     {
         if (statement is null) throw new ArgumentNullException(nameof(statement));
         if (statement.Rows is null) throw new ArgumentException("The statement rows are required.", nameof(statement));
         if (book is null) throw new ArgumentNullException(nameof(book));
         if (bankAccount is null) throw new ArgumentNullException(nameof(bankAccount));
         if (suspenseAccount is null) throw new ArgumentNullException(nameof(suspenseAccount));
+        if (exchangeRates is null) throw new ArgumentNullException(nameof(exchangeRates));
 
         var rows = statement.Rows;
         var warnings = new List<string>();
@@ -94,7 +98,23 @@ public sealed class LedgerImportRunner
 
             var account = book.GetAccount(offsetAccountId);
             if (!string.Equals(account.CurrencyCode, bankAccount.CurrencyCode, StringComparison.Ordinal))
-                warnings.Add($"Row {i + 1}: offset account {account.Code} uses a different currency.");
+                warnings.Add($"Row {i + 1}: offset account {account.Code} uses a different currency than the bank account.");
+
+            long bankAmountMinor = row.AmountMinor;
+            long offsetAmountMinor = -row.AmountMinor;
+            string postingCurrency = bankAccount.CurrencyCode;
+            string? conversionNote = null;
+            ExchangeRateLookupResult? conversion = null;
+
+            if (!string.Equals(row.CurrencyCode, bankAccount.CurrencyCode, StringComparison.OrdinalIgnoreCase))
+            {
+                conversion = _exchangeRates.FindRate(exchangeRates, row.Date, row.CurrencyCode, bankAccount.CurrencyCode);
+                bankAmountMinor = _exchangeRates.ConvertMinor(row.AmountMinor, conversion.Rate);
+                offsetAmountMinor = -bankAmountMinor;
+                conversionNote =
+                    $"Converted {AccountMath.FormatSigned(row.AmountMinor, row.CurrencyCode)} to " +
+                    $"{AccountMath.FormatSigned(bankAmountMinor, bankAccount.CurrencyCode)}. {conversion.Explanation}";
+            }
 
             var tx = book.AddTransaction(
                 row.Date,
@@ -103,12 +123,20 @@ public sealed class LedgerImportRunner
                 string.IsNullOrWhiteSpace(statement.Source) ? "statement-import" : statement.Source,
                 new[]
                 {
-                    (bankAccount.Id, row.AmountMinor, row.CurrencyCode),
-                    (offsetAccountId, -row.AmountMinor, row.CurrencyCode)
+                    (bankAccount.Id, bankAmountMinor, postingCurrency),
+                    (offsetAccountId, offsetAmountMinor, postingCurrency)
                 });
 
             tx.AppliedRuleId = ruleResult.AppliedRuleId;
-            tx.RuleExplanation = ruleResult.Explanation;
+            tx.RuleExplanation = conversionNote is null
+                ? ruleResult.Explanation
+                : $"{ruleResult.Explanation} {conversionNote}";
+            if (conversion is not null)
+            {
+                tx.SourceCurrencyCode = row.CurrencyCode;
+                tx.SourceAmountMinor = row.AmountMinor;
+                tx.ExchangeRatePpm = conversion.Rate.RatePpm;
+            }
             txCount++;
         }
 

@@ -17,6 +17,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _importFilePath = string.Empty;
     private StatementFormat _importFormat = StatementFormat.Auto;
     private long _netWorthMinor;
+    private string _baseCurrencyCode = "USD";
     private long _latestMonthIncomeMinor;
     private long _latestMonthExpenseMinor;
     private string _latestMonthLabel = "—";
@@ -56,6 +57,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         DeleteBudgetCommand = new RelayCommand(ExecuteDeleteBudget, () => EditingBudgetId.HasValue);
         ExportBudgetsCommand = new RelayCommand(ExecuteExportBudgets, () => Budgets.Count > 0);
         ExportBudgetVarianceCommand = new RelayCommand(ExecuteExportBudgetVariance, () => Transactions.Count > 0 && Budgets.Count > 0);
+        ExportConsolidatedCommand = new RelayCommand(ExecuteExportConsolidated, () => Accounts.Count > 0);
 
         Status = _service.StartupReport();
         Load();
@@ -70,6 +72,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<AccountRow> AssetAccounts { get; } = new();
     public ObservableCollection<BudgetRow> Budgets { get; } = new();
     public ObservableCollection<BudgetVarianceRow> BudgetVariance { get; } = new();
+    public ObservableCollection<ConsolidatedBalanceRow> ConsolidatedBalances { get; } = new();
 
     public ICommand ImportCommand { get; }
     public ICommand ExportLedgerCommand { get; }
@@ -82,6 +85,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand DeleteBudgetCommand { get; }
     public ICommand ExportBudgetsCommand { get; }
     public ICommand ExportBudgetVarianceCommand { get; }
+    public ICommand ExportConsolidatedCommand { get; }
 
     public AccountRow? SelectedAssetAccount
     {
@@ -119,7 +123,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         private set { _netWorthMinor = value; OnPropertyChanged(); OnPropertyChanged(nameof(NetWorthLabel)); }
     }
 
-    public string NetWorthLabel => LedgerService.FormatMinor(NetWorthMinor) + " USD";
+    public string NetWorthLabel => LedgerService.FormatMinor(NetWorthMinor) + " " + BaseCurrencyCode;
+
+    public string BaseCurrencyCode
+    {
+        get => _baseCurrencyCode;
+        private set { _baseCurrencyCode = value; OnPropertyChanged(); OnPropertyChanged(nameof(NetWorthLabel)); }
+    }
 
     public string LatestMonthLabel
     {
@@ -255,6 +265,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         AssetAccounts.Clear();
         Budgets.Clear();
         BudgetVariance.Clear();
+        ConsolidatedBalances.Clear();
+
+        BaseCurrencyCode = _service.BaseCurrencyCode;
 
         foreach (var account in _service.Accounts.OrderBy(a => a.Code))
         {
@@ -319,7 +332,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 LedgerService.FormatMinor(s.NetIncomeMinor)));
         }
 
-        NetWorthMinor = _service.NetWorth();
+        NetWorthMinor = _service.ConsolidatedNetWorth();
+
+        var consolidated = _service.BuildConsolidatedBalance();
+        foreach (var row in consolidated.Accounts.Where(a => a.NativeBalanceMinor != 0 || a.AccountType is AccountType.Asset or AccountType.Liability))
+        {
+            ConsolidatedBalances.Add(new ConsolidatedBalanceRow(
+                row.AccountCode,
+                row.AccountName,
+                row.AccountType.ToString(),
+                LedgerService.FormatMinor(row.NativeBalanceMinor) + " " + row.NativeCurrencyCode,
+                LedgerService.FormatMinor(row.BaseBalanceMinor) + " " + row.BaseCurrencyCode,
+                row.Explanation));
+        }
 
         var latest = summaries.LastOrDefault();
         if (latest is not null)
@@ -335,7 +360,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             LatestMonthExpenseMinor = 0;
         }
 
-        Detail = $"Net worth: {NetWorthLabel}. Latest month {LatestMonthLabel}: " +
+        Detail = $"Consolidated net worth in {BaseCurrencyCode}: {NetWorthLabel}. Latest month {LatestMonthLabel}: " +
                  $"income {LatestMonthIncomeLabel}, expense {LatestMonthExpenseLabel}.";
 
         foreach (var budget in _service.Budgets
@@ -591,6 +616,21 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private void ExecuteExportConsolidated()
+    {
+        try
+        {
+            string path = PromptSave("consolidated-balances-export.csv");
+            if (path is null) return;
+            _service.ExportConsolidatedBalances(path);
+            Status = $"Wrote consolidated balances export to {path}.";
+        }
+        catch (Exception ex)
+        {
+            Status = "Consolidated export failed: " + ex.Message;
+        }
+    }
+
     public void BeginEditRule(RuleRow row)
     {
         var rule = _service.Rules.FirstOrDefault(r => r.Id == row.Id);
@@ -629,6 +669,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         (DeleteBudgetCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (ExportBudgetsCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (ExportBudgetVarianceCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ExportConsolidatedCommand as RelayCommand)?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(BudgetLimitLabel));
     }
 
@@ -653,6 +694,7 @@ public sealed record SummaryRow(string Month, string AccountCode, string Account
 public sealed record MonthlyTotalRow(string Month, string Transactions, string Income, string Expense, string NetIncome);
 public sealed record BudgetRow(long Id, string Period, string Name, string AccountCode, string AccountName, string AccountType, string Limit, string Currency, string Note);
 public sealed record BudgetVarianceRow(string Month, string AccountCode, string AccountName, string AccountType, string Limit, string Actual, string Variance, string Currency, string Explanation);
+public sealed record ConsolidatedBalanceRow(string AccountCode, string AccountName, string AccountType, string NativeBalance, string BaseBalance, string Explanation);
 
 internal sealed class RelayCommand : ICommand
 {

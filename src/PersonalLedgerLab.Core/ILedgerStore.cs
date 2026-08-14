@@ -23,6 +23,14 @@ public interface ILedgerStore
     bool UpdateBudget(Budget budget);
     bool DeleteBudget(long budgetId);
 
+    string BaseCurrencyCode { get; }
+    void SetBaseCurrencyCode(string currencyCode);
+
+    IReadOnlyList<ExchangeRate> LoadExchangeRates();
+    long AddExchangeRate(ExchangeRate rate);
+    bool UpdateExchangeRate(ExchangeRate rate);
+    bool DeleteExchangeRate(long rateId);
+
     string DatabasePath { get; }
     bool IsFreshDatabase { get; }
 }

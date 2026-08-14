@@ -39,7 +39,7 @@ public class LedgerImportRunnerTests
     public void Import_balances_every_transaction()
     {
         var book = NewBook(out var bank, out var suspense, out var cats);
-        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats);
+        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats, []);
         Assert.Equal(3, result.TransactionCount);
         Assert.All(book.Transactions, t => Assert.True(t.IsBalanced));
     }
@@ -48,7 +48,7 @@ public class LedgerImportRunnerTests
     public void Reconciliation_uses_running_balance()
     {
         var book = NewBook(out var bank, out var suspense, out var cats);
-        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats);
+        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats, []);
         Assert.True(result.Reconciles);
         Assert.Equal(100000L, result.OpeningBalanceMinor);
         Assert.Equal(239563L, result.ActualClosingBalanceMinor);
@@ -59,7 +59,7 @@ public class LedgerImportRunnerTests
     public void Unmatched_rows_go_to_suspense_with_explanation()
     {
         var book = NewBook(out var bank, out var suspense, out var cats);
-        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats);
+        var result = new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats, []);
         var mystery = book.Transactions.Single(t => t.Description == "Mystery charge");
         Assert.Contains(mystery.Postings, p => p.AccountId == suspense.Id);
         Assert.Contains("No rule matched", mystery.RuleExplanation);
@@ -69,7 +69,7 @@ public class LedgerImportRunnerTests
     public void Matched_rows_apply_explainable_rule()
     {
         var book = NewBook(out var bank, out var suspense, out var cats);
-        new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats);
+        new LedgerImportRunner().Import(book, bank, suspense, Rows(), Rules(), cats, []);
         var salary = book.Transactions.Single(t => t.Description == "Salary ACME");
         Assert.Equal(2, salary.AppliedRuleId);
         Assert.Equal(2, salary.Postings.First(p => p.AccountId == 2).AccountId);
@@ -84,7 +84,7 @@ public class LedgerImportRunnerTests
             new() { Date = new DateOnly(2025,1,3), Description = "In", AmountMinor = 10000, RunningBalanceMinor = 20000, CurrencyCode = "USD" },
             new() { Date = new DateOnly(2025,1,4), Description = "Out", AmountMinor = -5000, RunningBalanceMinor = 100000, CurrencyCode = "USD" }
         };
-        var result = new LedgerImportRunner().Import(book, bank, suspense, rows, Rules(), cats);
+        var result = new LedgerImportRunner().Import(book, bank, suspense, rows, Rules(), cats, []);
         Assert.False(result.Reconciles);
         Assert.NotEmpty(result.Warnings);
     }

@@ -10,16 +10,18 @@ not need a secret.
 
 ## What this release does
 
-This release ships a coherent offline loop and a budget layer:
+This release ships a coherent offline loop, a budget layer, and multi-currency support:
 
 - Import a bundled CSV or OFX bank statement.
 - Auto-detect the statement format or choose CSV or OFX.
+- Convert foreign-currency rows at import time using stored exchange rates.
 - Apply categorization rules that explain each decision in plain language.
 - Edit the chart of accounts and the categorization rules.
 - Set a monthly or recurring budget target per category account.
 - Show a variance report that explains each under and over result.
 - Show a monthly summary with double-entry balances per account.
-- Export the ledger, the summary, the budgets, and the variance to CSV files.
+- Show a consolidated net-worth view in the ledger base currency.
+- Export the ledger, the summary, the budgets, the variance, and consolidated balances to CSV files.
 - Keep all data in a local SQLite file under your user profile.
 
 ## Architecture
@@ -29,7 +31,7 @@ dependency. The data layer provides persistence. The desktop interface calls
 the application service. This keeps storage and rules separate.
 
 ```text
-PersonalLedgerLab.Core      Domain model, adapters, rules, export, summaries, budgets.
+PersonalLedgerLab.Core      Domain model, adapters, rules, export, summaries, budgets, exchange rates.
 PersonalLedgerLab.Data      SQLite persistence of the Core model.
 PersonalLedgerLab.App       Avalonia desktop interface and the service facade.
 PersonalLedgerLab.Tests     Deterministic xUnit tests for the core behavior.
@@ -96,6 +98,24 @@ The variance report covers only the budgets that match a month in the summary.
 A budgeted category with no activity counts as zero actual. The operator can
 export the budgets and the variance to CSV for offline review.
 
+## Multi-currency and consolidated balances
+
+Each account stores a currency code. The ledger also stores a base currency.
+The default base currency is USD. Exchange rates are stored per effective date.
+
+When a statement row uses a different currency than the bank account, the import
+runner looks up the latest rate on or before the transaction date. It converts
+the row amount into the bank currency before it posts the transaction. The
+transaction stores the source currency, the source amount, and the rate used.
+
+The consolidated balance service converts each asset and liability balance into
+the base currency. It uses the latest stored rate on or before the as-of date.
+The Overview tab shows the consolidated net worth and a per-account grid. Each
+row lists the native balance and the converted base balance with an explanation.
+
+Seeded exchange rates cover EUR to USD for January and February 2025. A seeded
+EUR Savings asset account demonstrates same-currency imports without conversion.
+
 ## Setup
 
 You need the .NET 8 SDK. The desktop interface uses Avalonia 11. Restore the
@@ -117,8 +137,8 @@ dotnet run --project src/PersonalLedgerLab.App/PersonalLedgerLab.App.csproj
 Set the `PERSONAL_LEDGER_DB` environment variable to use a different database
 path, for example a file in your project folder for a clean demo run.
 
-Run the tests. Seventy-two deterministic tests cover the core behavior, the
-adapters, the budgets, and the SQLite persistence.
+Run the tests. Eighty deterministic tests cover the core behavior, the
+adapters, the budgets, the exchange rates, and the SQLite persistence.
 
 ```pwsh
 dotnet test PersonalLedgerLab.sln
@@ -126,8 +146,12 @@ dotnet test PersonalLedgerLab.sln
 
 ## Using the desktop interface
 
-Open the Import tab. Pick the bank account, which is the seeded Checking asset.
-Select Auto, CSV, or OFX in Format. Use Browse to choose a statement file.
+Open the Overview tab. It shows consolidated net worth in the base currency.
+The consolidated balances grid lists native and converted amounts per account.
+Use Export consolidated CSV to write the report to a file.
+
+Open the Import tab. Pick the bank account, which is the seeded Checking asset
+or the EUR Savings asset. Select Auto, CSV, or OFX in Format. Use Browse to choose a statement file.
 Choose Import. The status line reports the format, balances, and reconciliation result.
 
 Open the Categorization rules tab. The left panel edits a rule.
@@ -151,11 +175,16 @@ is 1807.48 USD.
 The OFX sample is `samples/statements/sample-statement.ofx`. It has two rows.
 Its closing balance is 2415.63 USD. The importer infers its 1000.00 USD opening balance.
 
+The EUR sample is `samples/statements/sample-statement-eur.csv`. It has three
+rows for January 2025. Import it into the EUR Savings account. The opening
+balance is 0.00 EUR. The closing balance is 457.25 EUR.
+
 The seeded chart of accounts uses these codes:
 
 ```text
-1000 Checking        Asset
-2000 Credit Card     Liability
+1000 Checking        Asset      USD
+1050 EUR Savings     Asset      EUR
+2000 Credit Card     Liability  USD
 3000 Opening Balances Equity
 3999 Uncategorized Suspense Equity
 4000 Salary          Income
@@ -167,6 +196,14 @@ The seeded chart of accounts uses these codes:
 5400 Utilities       Expense
 5500 Subscriptions   Expense
 5600 Clothing        Expense
+```
+
+Seeded EUR to USD exchange rates:
+
+```text
+2025-01-01  1 EUR = 1.085000 USD
+2025-01-15  1 EUR = 1.090000 USD
+2025-02-01  1 EUR = 1.078000 USD
 ```
 
 The seeded budgets set January 2025 targets for each seeded category:
@@ -197,6 +234,23 @@ Imported 2 OFX transactions. Opening 1000.00 closing 2415.63. Reconciles: True. 
 ```
 
 The warning makes the OFX balance assumption visible in the demo.
+
+The EUR sample produces this status line when you import into EUR Savings:
+
+```text
+Imported 3 CSV transactions. Opening 0.00 closing 457.25. Reconciles: True.
+```
+
+A foreign-currency row imported into USD Checking stores conversion metadata.
+The rule explanation names the source amount, the converted amount, and the rate.
+
+The consolidated balances export after both USD and EUR imports reads:
+
+```csv
+AsOfDate,AccountCode,AccountName,AccountType,NativeBalanceMinor,NativeCurrency,BaseBalanceMinor,BaseCurrency,ExchangeRatePpm,Explanation
+2025-01-31,1000,Checking,Asset,80748,USD,80748,USD,1000000,"Same currency. No conversion was applied."
+2025-01-31,1050,EUR Savings,Asset,45725,EUR,50144,USD,1090000,"Used rate 1.090000 USD per 1 EUR on 2025-01-15."
+```
 
 The monthly summary for January 2025 has these account totals:
 
@@ -252,8 +306,10 @@ account code so a reader can audit a total back to a statement row.
 This release is intentionally small. The following items are out of scope
 for this run and are listed in the roadmap:
 
-- Single-currency ledgers. The schema stores currency per posting, but the
-  summary and the import in this release assume one currency per file.
+- The desktop interface does not edit exchange rates or the base currency yet.
+  Rates are seeded and stored in SQLite for import and consolidation.
+- Budgets and monthly summaries still assume one reporting currency per run.
+- Cross-currency transactions do not post to a dedicated FX gain or loss account.
 - CSV uses comma-separated files. Header aliases cover common bank exports.
 - OFX covers bank transaction rows, not investments or images.
 - Budgets track one category per row and one month per row. They do not roll
@@ -265,12 +321,13 @@ for this run and are listed in the roadmap:
 
 ## Test status
 
-Seventy-two deterministic tests pass. They cover money math, ledger balance,
+Eighty deterministic tests pass. They cover money math, ledger balance,
 the rule engine, CSV aliases, OFX parsing, statement reconciliation, budgets,
-CSV export, SQLite persistence, and both sample statement pipelines.
+exchange-rate conversion, consolidated balances, CSV export, SQLite persistence,
+and all three sample statement pipelines.
 
 ```text
-Passed!  - Failed: 0, Passed: 72, Skipped: 0, Total: 72
+Passed!  - Failed: 0, Passed: 80, Skipped: 0, Total: 80
 ```
 
 The CI workflow builds and tests the solution on Windows and Linux.
@@ -286,10 +343,12 @@ ships as one coherent release.
 2. Done: monthly and recurring budgets per category, a variance report, and
    budget and variance CSV export.
 3. Done: CSV header aliases, format auto-detection, and an OFX bank statement reader.
-4. Multi-currency: add exchange rates at posting time and a consolidated view.
+4. Done: exchange rates at import time, conversion audit metadata, a consolidated
+   net-worth view, and an EUR sample account and statement.
 5. Scheduled transactions: add recurring entries that generate postings.
 6. Reports: add a net-worth chart, a category trend chart, and a print view.
 7. Integrity: add a periodic full reconciliation against a manual trial balance.
+8. Multi-currency UI: add exchange-rate editing and FX gain or loss accounts.
 
 ## License
 

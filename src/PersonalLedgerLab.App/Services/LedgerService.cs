@@ -14,6 +14,7 @@ public sealed class LedgerService
     private readonly ILedgerStore _store;
     private readonly LedgerImportRunner _importRunner = new();
     private readonly StatementImporterRegistry _importers = new();
+    private readonly ConsolidatedBalanceService _consolidated = new();
 
     public LedgerService(ILedgerStore store)
     {
@@ -25,6 +26,8 @@ public sealed class LedgerService
     public IReadOnlyList<CategoryRule> Rules { get; private set; } = Array.Empty<CategoryRule>();
     public IReadOnlyList<Transaction> Transactions { get; private set; } = Array.Empty<Transaction>();
     public IReadOnlyList<Budget> Budgets { get; private set; } = Array.Empty<Budget>();
+    public IReadOnlyList<ExchangeRate> ExchangeRates { get; private set; } = Array.Empty<ExchangeRate>();
+    public string BaseCurrencyCode => _store.BaseCurrencyCode;
 
     public bool IsFreshDatabase => _store.IsFreshDatabase;
     public string DatabasePath => _store.DatabasePath;
@@ -48,6 +51,7 @@ public sealed class LedgerService
         Rules = _store.LoadRules();
         Transactions = _store.LoadTransactions();
         Budgets = _store.LoadBudgets();
+        ExchangeRates = _store.LoadExchangeRates();
     }
 
     public StatementImportResult ImportStatement(string csvPath, long bankAccountId) =>
@@ -65,7 +69,7 @@ public sealed class LedgerService
             book.AddAccount(account);
 
         var result = _importRunner.Import(
-            book, bankAccount, suspense, statement, Rules, categoryById);
+            book, bankAccount, suspense, statement, Rules, categoryById, ExchangeRates);
 
         foreach (var tx in book.Transactions)
             _store.SaveTransaction(tx);
@@ -93,24 +97,16 @@ public sealed class LedgerService
         return account.IsDebitNormal ? raw : -raw;
     }
 
-    public long NetWorth()
-    {
-        long assets = 0;
-        long liabilities = 0;
-        foreach (var account in Accounts)
-        {
-            long raw = Transactions.SelectMany(t => t.Postings)
-                .Where(p => p.AccountId == account.Id)
-                .Sum(p => p.AmountMinor);
-            long balance = account.IsDebitNormal ? raw : -raw;
-            if (account.Type == AccountType.Asset) assets += balance;
-            else if (account.Type == AccountType.Liability) liabilities += balance;
-        }
-        return assets - liabilities;
-    }
+    public long NetWorth() => ConsolidatedNetWorth();
 
-    public IReadOnlyList<MonthlySummary> BuildSummary(string currency = "USD") =>
-        SummaryService.Build(Transactions, Accounts, currency);
+    public long ConsolidatedNetWorth(DateOnly? asOfDate = null) =>
+        BuildConsolidatedBalance(asOfDate).NetWorthMinor;
+
+    public ConsolidatedBalanceReport BuildConsolidatedBalance(DateOnly? asOfDate = null) =>
+        _consolidated.Build(Transactions, Accounts, ExchangeRates, BaseCurrencyCode, asOfDate);
+
+    public IReadOnlyList<MonthlySummary> BuildSummary(string? currency = null) =>
+        SummaryService.Build(Transactions, Accounts, currency ?? BaseCurrencyCode);
 
     public long AddRule(string name, int priority, RuleMatchType matchType, string matchValue, long categoryId)
     {
@@ -208,8 +204,8 @@ public sealed class LedgerService
         return ok;
     }
 
-    public IReadOnlyList<BudgetVariance> BuildBudgetVariance(string currency = "USD") =>
-        BudgetService.Build(BuildSummary(currency), Budgets, Accounts, currency);
+    public IReadOnlyList<BudgetVariance> BuildBudgetVariance(string? currency = null) =>
+        BudgetService.Build(BuildSummary(currency), Budgets, Accounts, currency ?? BaseCurrencyCode);
 
     public void ExportLedger(string path)
     {
@@ -235,12 +231,19 @@ public sealed class LedgerService
         CsvExporter.ExportBudgetVariance(BuildBudgetVariance(), writer);
     }
 
+    public void ExportConsolidatedBalances(string path, DateOnly? asOfDate = null)
+    {
+        using var writer = new StreamWriter(path, false, Encoding.UTF8);
+        CsvExporter.ExportConsolidatedBalances(BuildConsolidatedBalance(asOfDate), writer);
+    }
+
     public string StartupReport()
     {
         var sb = new StringBuilder();
         sb.AppendLine("Personal Ledger Lab");
         sb.AppendLine($"Database: {DatabasePath}");
         sb.AppendLine($"Accounts: {Accounts.Count}, Rules: {Rules.Count}, Transactions: {Transactions.Count}");
+        sb.AppendLine($"Exchange rates: {ExchangeRates.Count}, Base currency: {BaseCurrencyCode}");
         sb.AppendLine($"Fresh database: {IsFreshDatabase}");
         return sb.ToString();
     }

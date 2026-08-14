@@ -34,7 +34,7 @@ public class EndToEndTests : IDisposable
         foreach (var a in accounts)
             book.AddAccount(a);
 
-        var result = new LedgerImportRunner().Import(book, bank, suspense, rows, rules, byId);
+        var result = new LedgerImportRunner().Import(book, bank, suspense, rows, rules, byId, Array.Empty<ExchangeRate>());
 
         Assert.Equal(15, result.TransactionCount);
         Assert.True(result.Reconciles);
@@ -75,7 +75,7 @@ public class EndToEndTests : IDisposable
         foreach (var a in accounts)
             book.AddAccount(a);
 
-        new LedgerImportRunner().Import(book, bank, suspense, rows, rules, byId);
+        new LedgerImportRunner().Import(book, bank, suspense, rows, rules, byId, Array.Empty<ExchangeRate>());
         foreach (var tx in book.Transactions)
             _store.SaveTransaction(tx);
 
@@ -112,11 +112,34 @@ public class EndToEndTests : IDisposable
         foreach (var a in accounts)
             book.AddAccount(a);
 
-        new LedgerImportRunner().Import(book, bank, suspense, rows, rules, accounts.ToDictionary(a => a.Id));
+        new LedgerImportRunner().Import(book, bank, suspense, rows, rules, accounts.ToDictionary(a => a.Id), Array.Empty<ExchangeRate>());
 
         var salaryTx = book.Transactions.Single(t => t.Description.StartsWith("Salary"));
         Assert.NotNull(salaryTx.AppliedRuleId);
         Assert.Contains("Salary", salaryTx.RuleExplanation!);
+    }
+
+    [Fact]
+    public void Eur_sample_imports_into_eur_savings_account()
+    {
+        var accounts = _store.LoadAccounts();
+        var rules = _store.LoadRules();
+        var rates = _store.LoadExchangeRates();
+        var bank = accounts.First(a => a.Code == "1050");
+        var suspense = accounts.First(a => a.Code == "3999");
+        var path = Path.Combine(AppContext.BaseDirectory, "samples", "sample-statement-eur.csv");
+        var rows = new CsvStatementImporter().ReadFile(path);
+        var book = new LedgerBook();
+        foreach (var account in accounts)
+            book.AddAccount(account);
+
+        var result = new LedgerImportRunner().Import(
+            book, bank, suspense, rows, rules, accounts.ToDictionary(a => a.Id), rates);
+
+        Assert.Equal(3, result.TransactionCount);
+        Assert.True(result.Reconciles);
+        Assert.All(book.Transactions, t => Assert.True(t.IsBalanced));
+        Assert.All(book.Transactions, t => Assert.All(t.Postings, p => Assert.Equal("EUR", p.CurrencyCode)));
     }
 
     [Fact]
@@ -132,7 +155,7 @@ public class EndToEndTests : IDisposable
             book.AddAccount(account);
 
         var result = new LedgerImportRunner().Import(
-            book, bank, suspense, statement, rules, accounts.ToDictionary(a => a.Id));
+            book, bank, suspense, statement, rules, accounts.ToDictionary(a => a.Id), _store.LoadExchangeRates());
 
         Assert.Equal("OFX", result.FormatName);
         Assert.Equal(2, result.TransactionCount);
