@@ -19,9 +19,12 @@ public class SqliteLedgerStoreTests : IDisposable
     {
         var accounts = _store.LoadAccounts();
         Assert.Contains(accounts, a => a.Code == "1000");
+        Assert.Contains(accounts, a => a.Code == "1050");
         Assert.Contains(accounts, a => a.Code == "3999");
         Assert.Contains(accounts, a => a.Code == "5100");
         Assert.True(_store.LoadRules().Count > 0);
+        Assert.True(_store.LoadExchangeRates().Count > 0);
+        Assert.Equal("USD", _store.BaseCurrencyCode);
     }
 
     [Fact]

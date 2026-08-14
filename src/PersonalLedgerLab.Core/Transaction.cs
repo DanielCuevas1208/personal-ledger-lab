@@ -12,6 +12,9 @@ public sealed class Transaction
     public string Source { get; set; } = string.Empty;
     public string? RuleExplanation { get; set; }
     public long? AppliedRuleId { get; set; }
+    public string? SourceCurrencyCode { get; set; }
+    public long? SourceAmountMinor { get; set; }
+    public long? ExchangeRatePpm { get; set; }
     public List<Posting> Postings { get; set; } = new();
 
     public Transaction() { }

@@ -16,6 +16,7 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
 
     public string DatabasePath { get; }
     public bool IsFreshDatabase { get; }
+    public string BaseCurrencyCode { get; private set; } = "USD";
 
     public SqliteLedgerStore(string databasePath)
     {
@@ -42,6 +43,8 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
 
         Execute("PRAGMA foreign_keys = ON;");
         EnsureSchema();
+        MigrateSchema();
+        LoadSettings();
         if (IsFreshDatabase)
             Seed();
     }
@@ -52,6 +55,8 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
         _ownsConnection = false;
         DatabasePath = _connection.DataSource ?? string.Empty;
         EnsureSchema();
+        MigrateSchema();
+        LoadSettings();
     }
 
     public IReadOnlyList<Account> LoadAccounts()
@@ -182,7 +187,8 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
         {
             txCmd.CommandText = @"
                 SELECT id, date, description, reference, source,
-                       applied_rule_id, rule_explanation
+                       applied_rule_id, rule_explanation,
+                       source_currency_code, source_amount_minor, exchange_rate_ppm
                 FROM transactions ORDER BY date, id;";
             using var reader = txCmd.ExecuteReader();
             while (reader.Read())
@@ -195,7 +201,10 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                     Reference = reader.IsDBNull(3) ? null : reader.GetString(3),
                     Source = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
                     AppliedRuleId = reader.IsDBNull(5) ? null : reader.GetInt64(5),
-                    RuleExplanation = reader.IsDBNull(6) ? null : reader.GetString(6)
+                    RuleExplanation = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    SourceCurrencyCode = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    SourceAmountMinor = reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                    ExchangeRatePpm = reader.IsDBNull(9) ? null : reader.GetInt64(9)
                 };
                 byId[tx.Id] = tx;
             }
@@ -242,8 +251,10 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 txCmd.Transaction = tx;
                 txCmd.CommandText = @"
                     INSERT INTO transactions
-                        (date, description, reference, source, applied_rule_id, rule_explanation)
-                    VALUES ($date, $desc, $ref, $source, $ruleId, $ruleExplain);
+                        (date, description, reference, source, applied_rule_id, rule_explanation,
+                         source_currency_code, source_amount_minor, exchange_rate_ppm)
+                    VALUES ($date, $desc, $ref, $source, $ruleId, $ruleExplain,
+                            $sourceCurrency, $sourceAmount, $ratePpm);
                     SELECT last_insert_rowid();";
                 AddParam(txCmd, "$date", transaction.Date.ToString("yyyy-MM-dd"));
                 AddParam(txCmd, "$desc", transaction.Description);
@@ -251,6 +262,9 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 AddParam(txCmd, "$source", (object?)transaction.Source ?? DBNull.Value);
                 AddParam(txCmd, "$ruleId", (object?)transaction.AppliedRuleId ?? DBNull.Value);
                 AddParam(txCmd, "$ruleExplain", (object?)transaction.RuleExplanation ?? DBNull.Value);
+                AddParam(txCmd, "$sourceCurrency", (object?)transaction.SourceCurrencyCode ?? DBNull.Value);
+                AddParam(txCmd, "$sourceAmount", (object?)transaction.SourceAmountMinor ?? DBNull.Value);
+                AddParam(txCmd, "$ratePpm", (object?)transaction.ExchangeRatePpm ?? DBNull.Value);
                 newId = (long)txCmd.ExecuteScalar()!;
             }
 
@@ -376,6 +390,91 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
         return cmd.ExecuteNonQuery() > 0;
     }
 
+    public void SetBaseCurrencyCode(string currencyCode)
+    {
+        if (string.IsNullOrWhiteSpace(currencyCode))
+            throw new ArgumentException("A base currency code is required.", nameof(currencyCode));
+        string normalized = currencyCode.ToUpperInvariant();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO ledger_settings (key, value)
+            VALUES ('base_currency_code', $value)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
+        AddParam(cmd, "$value", normalized);
+        cmd.ExecuteNonQuery();
+        BaseCurrencyCode = normalized;
+    }
+
+    public IReadOnlyList<ExchangeRate> LoadExchangeRates()
+    {
+        var rates = new List<ExchangeRate>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT id, effective_date, from_currency, to_currency, rate_ppm
+            FROM exchange_rates
+            ORDER BY effective_date, from_currency, to_currency, id;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rates.Add(new ExchangeRate(
+                reader.GetInt64(0),
+                DateOnly.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4)));
+        }
+        return rates;
+    }
+
+    public long AddExchangeRate(ExchangeRate rate)
+    {
+        if (rate is null) throw new ArgumentNullException(nameof(rate));
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO exchange_rates (effective_date, from_currency, to_currency, rate_ppm)
+            VALUES ($date, $from, $to, $ppm);
+            SELECT last_insert_rowid();";
+        AddParam(cmd, "$date", rate.EffectiveDate.ToString("yyyy-MM-dd"));
+        AddParam(cmd, "$from", rate.FromCurrency);
+        AddParam(cmd, "$to", rate.ToCurrency);
+        AddParam(cmd, "$ppm", rate.RatePpm);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public bool UpdateExchangeRate(ExchangeRate rate)
+    {
+        if (rate is null) throw new ArgumentNullException(nameof(rate));
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE exchange_rates
+            SET effective_date = $date, from_currency = $from,
+                to_currency = $to, rate_ppm = $ppm
+            WHERE id = $id;";
+        AddParam(cmd, "$id", rate.Id);
+        AddParam(cmd, "$date", rate.EffectiveDate.ToString("yyyy-MM-dd"));
+        AddParam(cmd, "$from", rate.FromCurrency);
+        AddParam(cmd, "$to", rate.ToCurrency);
+        AddParam(cmd, "$ppm", rate.RatePpm);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    public bool DeleteExchangeRate(long rateId)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM exchange_rates WHERE id = $id;";
+        AddParam(cmd, "$id", rateId);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    private void LoadSettings()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM ledger_settings WHERE key = 'base_currency_code';";
+        var value = cmd.ExecuteScalar() as string;
+        if (!string.IsNullOrWhiteSpace(value))
+            BaseCurrencyCode = value.ToUpperInvariant();
+    }
+
     private void EnsureSchema()
     {
         Execute(@"
@@ -405,7 +504,10 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 reference TEXT,
                 source TEXT,
                 applied_rule_id INTEGER,
-                rule_explanation TEXT
+                rule_explanation TEXT,
+                source_currency_code TEXT,
+                source_amount_minor INTEGER,
+                exchange_rate_ppm INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS postings (
@@ -434,40 +536,158 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             CREATE UNIQUE INDEX IF NOT EXISTS idx_budgets_scope
                 ON budgets(category_account_id, year, month);
 
+            CREATE TABLE IF NOT EXISTS exchange_rates (
+                id INTEGER PRIMARY KEY,
+                effective_date TEXT NOT NULL,
+                from_currency TEXT NOT NULL,
+                to_currency TEXT NOT NULL,
+                rate_ppm INTEGER NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_rates_scope
+                ON exchange_rates(effective_date, from_currency, to_currency);
+
+            CREATE TABLE IF NOT EXISTS ledger_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_postings_tx ON postings(transaction_id);
             CREATE INDEX IF NOT EXISTS idx_postings_acct ON postings(account_id);
             CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
         ");
     }
 
-    private void Seed()
+    private void MigrateSchema()
     {
-        var seedAccounts = new (string Code, string Name, AccountType Type)[]
+        TryAddColumn("transactions", "source_currency_code", "TEXT");
+        TryAddColumn("transactions", "source_amount_minor", "INTEGER");
+        TryAddColumn("transactions", "exchange_rate_ppm", "INTEGER");
+        EnsureExchangeRatesTable();
+        EnsureLedgerSettingsTable();
+        if (!IsFreshDatabase)
         {
-            ("1000", "Checking", AccountType.Asset),
-            ("2000", "Credit Card", AccountType.Liability),
-            ("3000", "Opening Balances", AccountType.Equity),
-            ("3999", "Uncategorized (Suspense)", AccountType.Equity),
-            ("4000", "Salary", AccountType.Income),
-            ("4100", "Other Income", AccountType.Income),
-            ("5000", "Groceries", AccountType.Expense),
-            ("5100", "Dining", AccountType.Expense),
-            ("5200", "Coffee", AccountType.Expense),
-            ("5300", "Transport", AccountType.Expense),
-            ("5400", "Utilities", AccountType.Expense),
-            ("5500", "Subscriptions", AccountType.Expense),
-            ("5600", "Clothing", AccountType.Expense)
+            EnsureEurSavingsAccount();
+            EnsureSeedExchangeRates();
+        }
+    }
+
+    private void TryAddColumn(string table, string column, string type)
+    {
+        if (ColumnExists(table, column))
+            return;
+        Execute($"ALTER TABLE {table} ADD COLUMN {column} {type};");
+    }
+
+    private bool ColumnExists(string table, string column)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table});";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private void EnsureExchangeRatesTable()
+    {
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS exchange_rates (
+                id INTEGER PRIMARY KEY,
+                effective_date TEXT NOT NULL,
+                from_currency TEXT NOT NULL,
+                to_currency TEXT NOT NULL,
+                rate_ppm INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_rates_scope
+                ON exchange_rates(effective_date, from_currency, to_currency);");
+    }
+
+    private void EnsureLedgerSettingsTable()
+    {
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS ledger_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );");
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO ledger_settings (key, value)
+            SELECT 'base_currency_code', 'USD'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM ledger_settings WHERE key = 'base_currency_code');";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void EnsureEurSavingsAccount()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM accounts WHERE code = '1050';";
+        if ((long)cmd.ExecuteScalar()! > 0)
+            return;
+
+        using var insert = _connection.CreateCommand();
+        insert.CommandText = @"
+            INSERT INTO accounts (code, name, type, currency_code, note)
+            VALUES ('1050', 'EUR Savings', $type, 'EUR', $note);";
+        AddParam(insert, "$type", (int)AccountType.Asset);
+        AddParam(insert, "$note", "Seeded EUR asset account for multi-currency demos.");
+        insert.ExecuteNonQuery();
+    }
+
+    private void EnsureSeedExchangeRates()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM exchange_rates;";
+        if ((long)cmd.ExecuteScalar()! > 0)
+            return;
+
+        var seedRates = new (DateOnly Date, string From, string To, long Ppm)[]
+        {
+            (new DateOnly(2025, 1, 1), "EUR", "USD", ExchangeRateMath.FromDecimal(1.085000m)),
+            (new DateOnly(2025, 1, 15), "EUR", "USD", ExchangeRateMath.FromDecimal(1.090000m)),
+            (new DateOnly(2025, 2, 1), "EUR", "USD", ExchangeRateMath.FromDecimal(1.078000m))
         };
 
-        foreach (var (code, name, type) in seedAccounts)
+        foreach (var (date, from, to, ppm) in seedRates)
+        {
+            AddExchangeRate(new ExchangeRate(0, date, from, to, ppm));
+        }
+    }
+
+    private void Seed()
+    {
+        var seedAccounts = new (string Code, string Name, AccountType Type, string Currency)[]
+        {
+            ("1000", "Checking", AccountType.Asset, "USD"),
+            ("1050", "EUR Savings", AccountType.Asset, "EUR"),
+            ("2000", "Credit Card", AccountType.Liability, "USD"),
+            ("3000", "Opening Balances", AccountType.Equity, "USD"),
+            ("3999", "Uncategorized (Suspense)", AccountType.Equity, "USD"),
+            ("4000", "Salary", AccountType.Income, "USD"),
+            ("4100", "Other Income", AccountType.Income, "USD"),
+            ("5000", "Groceries", AccountType.Expense, "USD"),
+            ("5100", "Dining", AccountType.Expense, "USD"),
+            ("5200", "Coffee", AccountType.Expense, "USD"),
+            ("5300", "Transport", AccountType.Expense, "USD"),
+            ("5400", "Utilities", AccountType.Expense, "USD"),
+            ("5500", "Subscriptions", AccountType.Expense, "USD"),
+            ("5600", "Clothing", AccountType.Expense, "USD")
+        };
+
+        foreach (var (code, name, type, currency) in seedAccounts)
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO accounts (code, name, type, currency_code, note)
-                VALUES ($code, $name, $type, 'USD', $note);";
+                VALUES ($code, $name, $type, $currency, $note);";
             AddParam(cmd, "$code", code);
             AddParam(cmd, "$name", name);
             AddParam(cmd, "$type", (int)type);
+            AddParam(cmd, "$currency", currency);
             AddParam(cmd, "$note", $"Seeded chart of accounts entry {code}.");
             cmd.ExecuteNonQuery();
         }
@@ -533,6 +753,18 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             };
             AddBudget(budget);
         }
+
+        SetBaseCurrencyCode("USD");
+
+        var seedRates = new (DateOnly Date, string From, string To, long Ppm)[]
+        {
+            (new DateOnly(2025, 1, 1), "EUR", "USD", ExchangeRateMath.FromDecimal(1.085000m)),
+            (new DateOnly(2025, 1, 15), "EUR", "USD", ExchangeRateMath.FromDecimal(1.090000m)),
+            (new DateOnly(2025, 2, 1), "EUR", "USD", ExchangeRateMath.FromDecimal(1.078000m))
+        };
+
+        foreach (var (date, from, to, ppm) in seedRates)
+            AddExchangeRate(new ExchangeRate(0, date, from, to, ppm));
     }
 
     private void Execute(string sql)

@@ -67,7 +67,7 @@ public class MainWindow : Window
 
     private Control BuildOverview()
     {
-        var netWorthLabel = new TextBlock { Text = "Net worth", Opacity = 0.65 };
+        var netWorthLabel = new TextBlock { Text = "Consolidated net worth", Opacity = 0.65 };
         var netWorth = new TextBlock { FontSize = 24, FontWeight = FontWeight.Bold };
         BindTo(netWorth, TextBlock.TextProperty, nameof(_vm.NetWorthLabel));
         var detail = new TextBlock { Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
@@ -109,6 +109,16 @@ public class MainWindow : Window
         cards.Children.Add(Card(topStack));
         cards.Children.Add(Card(monthStack));
 
+        var consolidatedTitle = new TextBlock { Text = "Consolidated balances", Opacity = 0.65 };
+        var consolidatedGrid = NewGrid(nameof(_vm.ConsolidatedBalances));
+        var exportConsolidated = new Button { Content = "Export consolidated CSV" };
+        BindTo(exportConsolidated, Button.CommandProperty, nameof(_vm.ExportConsolidatedCommand));
+        var consolidatedStack = new StackPanel { Spacing = 6 };
+        consolidatedStack.Children.Add(consolidatedTitle);
+        consolidatedStack.Children.Add(consolidatedGrid);
+        consolidatedStack.Children.Add(exportConsolidated);
+        cards.Children.Add(Card(consolidatedStack));
+
         var accountsGrid = NewGrid(nameof(_vm.Accounts));
         Grid.SetColumn(accountsGrid, 1);
 
@@ -124,7 +134,8 @@ public class MainWindow : Window
     {
         var bankLabel = new TextBlock { Text = "Bank account:", VerticalAlignment = VerticalAlignment.Center, Width = 90 };
         var bankCombo = new ComboBox { Width = 260 };
-        bankCombo.ItemTemplate = new FuncDataTemplate<Account>((a, _) => new TextBlock { Text = a?.Code });
+        bankCombo.ItemTemplate = new FuncDataTemplate<AccountRow>((a, _) =>
+            new TextBlock { Text = a is null ? string.Empty : $"{a.Code} {a.Currency}" });
         bankCombo.ItemsSource = _vm.AssetAccounts;
         BindTo(bankCombo, SelectingItemsControl.SelectedItemProperty, nameof(_vm.SelectedAssetAccount));
         var formatLabel = new TextBlock { Text = "Format:", VerticalAlignment = VerticalAlignment.Center, Width = 52 };
