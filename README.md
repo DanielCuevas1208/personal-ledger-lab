@@ -10,7 +10,7 @@ not need a secret.
 
 ## What this release does
 
-This release ships a coherent offline loop, a budget layer, and multi-currency support:
+This release ships recurring postings on top of the offline ledger, budget, and currency features:
 
 - Import a bundled CSV or OFX bank statement.
 - Auto-detect the statement format or choose CSV or OFX.
@@ -21,6 +21,9 @@ This release ships a coherent offline loop, a budget layer, and multi-currency s
 - Show a variance report that explains each under and over result.
 - Show a monthly summary with double-entry balances per account.
 - Show a consolidated net-worth view in the ledger base currency.
+- Define monthly recurring entries between two same-currency accounts.
+- Preview recurring entries for an inclusive date range.
+- Select entries and post them once. Repeated posting skips existing occurrences.
 - Export the ledger, the summary, the budgets, the variance, and consolidated balances to CSV files.
 - Keep all data in a local SQLite file under your user profile.
 
@@ -31,9 +34,9 @@ dependency. The data layer provides persistence. The desktop interface calls
 the application service. This keeps storage and rules separate.
 
 ```text
-PersonalLedgerLab.Core      Domain model, adapters, rules, export, summaries, budgets, exchange rates.
-PersonalLedgerLab.Data      SQLite persistence of the Core model.
-PersonalLedgerLab.App       Avalonia desktop interface and the service facade.
+PersonalLedgerLab.Core      Domain model, adapters, rules, reports, recurrence, and export.
+PersonalLedgerLab.Data      SQLite persistence, migrations, and seeded demo data.
+PersonalLedgerLab.App       Avalonia desktop interface and the application facade.
 PersonalLedgerLab.Tests     Deterministic xUnit tests for the core behavior.
 ```
 
@@ -127,8 +130,8 @@ dotnet build PersonalLedgerLab.sln --configuration Release
 ```
 
 Run the desktop interface. The first run creates a SQLite database in your
-local application data folder and seeds the chart of accounts and the sample
-rules.
+local application data folder and seeds the chart of accounts, sample rules,
+and one recurring template.
 
 ```pwsh
 dotnet run --project src/PersonalLedgerLab.App/PersonalLedgerLab.App.csproj
@@ -137,8 +140,8 @@ dotnet run --project src/PersonalLedgerLab.App/PersonalLedgerLab.App.csproj
 Set the `PERSONAL_LEDGER_DB` environment variable to use a different database
 path, for example a file in your project folder for a clean demo run.
 
-Run the tests. Eighty deterministic tests cover the core behavior, the
-adapters, the budgets, the exchange rates, and the SQLite persistence.
+Run the tests. Eighty-four deterministic tests cover the core behavior, adapters,
+budgets, currencies, recurring postings, and SQLite persistence.
 
 ```pwsh
 dotnet test PersonalLedgerLab.sln
@@ -165,6 +168,10 @@ Open the Budgets tab. The left panel edits a budget. Set a year, a month, a
 category, and a limit. Use year 0 and month 0 for a recurring budget. Double
 click a row on the right grid to load it. The lower grid shows the variance for
 each month. Use the Export buttons to write the budgets or the variance to CSV.
+
+Open the Scheduled postings tab. Add a monthly template with a day, two accounts,
+and a positive amount. Enter a date range, then choose Preview. Select entries
+and choose Post selected. A posted occurrence shows its transaction id.
 
 ## Sample data
 
@@ -241,6 +248,22 @@ The EUR sample produces this status line when you import into EUR Savings:
 Imported 3 CSV transactions. Opening 0.00 closing 457.25. Reconciles: True.
 ```
 
+The seeded recurring template previews three entries for January through March 2025:
+
+```text
+2025-01-31  Monthly utility reserve  5400 -> 1000  95.00 USD  Ready to post
+2025-02-28  Monthly utility reserve  5400 -> 1000  95.00 USD  Ready to post
+2025-03-31  Monthly utility reserve  5400 -> 1000  95.00 USD  Ready to post
+```
+
+Posting the three selected rows reports:
+
+```text
+Posted 3 recurring entries. Skipped 0 already posted entries.
+```
+
+A repeated post request reports three skipped entries and creates no duplicate transactions.
+
 A foreign-currency row imported into USD Checking stores conversion metadata.
 The rule explanation names the source amount, the converted amount, and the rate.
 
@@ -314,6 +337,9 @@ for this run and are listed in the roadmap:
 - OFX covers bank transaction rows, not investments or images.
 - Budgets track one category per row and one month per row. They do not roll
   over, they do not forecast, and they do not set envelope balances.
+- Scheduled postings support monthly dates only. They clamp short months and do
+  not model holidays, business days, end dates, or automatic bank reconciliation.
+- Editing a template does not rewrite occurrences already posted from that template.
 - No multi-user data or sync. The data file is for one local profile.
 - The desktop interface is built in C# rather than XAML. The Avalonia XAML
   source generator needs a newer compiler than the .NET 8 SDK in this
@@ -321,13 +347,13 @@ for this run and are listed in the roadmap:
 
 ## Test status
 
-Eighty deterministic tests pass. They cover money math, ledger balance,
+Eighty-four deterministic tests pass. They cover money math, ledger balance,
 the rule engine, CSV aliases, OFX parsing, statement reconciliation, budgets,
-exchange-rate conversion, consolidated balances, CSV export, SQLite persistence,
-and all three sample statement pipelines.
+exchange-rate conversion, consolidated balances, recurring postings, CSV export,
+SQLite persistence, and all three sample statement pipelines.
 
 ```text
-Passed!  - Failed: 0, Passed: 80, Skipped: 0, Total: 80
+Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84
 ```
 
 The CI workflow builds and tests the solution on Windows and Linux.
@@ -335,20 +361,8 @@ Package versions are pinned exactly in each csproj. Lockfiles make the restore r
 
 ## Roadmap
 
-The roadmap records what is complete and what remains. Each remaining step
-ships as one coherent release.
-
-1. Done: offline import, reconciliation, explainable rules, monthly summary,
-   CSV export, and SQLite persistence.
-2. Done: monthly and recurring budgets per category, a variance report, and
-   budget and variance CSV export.
-3. Done: CSV header aliases, format auto-detection, and an OFX bank statement reader.
-4. Done: exchange rates at import time, conversion audit metadata, a consolidated
-   net-worth view, and an EUR sample account and statement.
-5. Scheduled transactions: add recurring entries that generate postings.
-6. Reports: add a net-worth chart, a category trend chart, and a print view.
-7. Integrity: add a periodic full reconciliation against a manual trial balance.
-8. Multi-currency UI: add exchange-rate editing and FX gain or loss accounts.
+The detailed roadmap uses stable milestone ids, acceptance criteria, and verification commands.
+Read [ROADMAP.md](ROADMAP.md) before selecting the next release.
 
 ## License
 

@@ -10,6 +10,9 @@ defaults:
   run:
     shell: pwsh
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     strategy:
@@ -17,6 +20,7 @@ jobs:
       matrix:
         os: [ windows-latest, ubuntu-latest ]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
 
     steps:
       - name: Check out
@@ -34,7 +38,7 @@ jobs:
         run: dotnet build PersonalLedgerLab.sln --configuration Release --no-restore -warnaserror -m:1
 
       - name: Test
-        run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build -m:1 --logger "console;verbosity=normal"
+        run: dotnet test PersonalLedgerLab.sln --configuration Release --no-build -m:1 --logger "console;verbosity=normal" --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
 
       - name: Upload test results
         if: always()
