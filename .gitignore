@@ -22,6 +22,7 @@ packages/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+TestResults/
 
 # Local runtime data and user ledgers
 *.sqlite

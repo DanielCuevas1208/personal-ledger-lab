@@ -15,6 +15,7 @@ public sealed class LedgerService
     private readonly LedgerImportRunner _importRunner = new();
     private readonly StatementImporterRegistry _importers = new();
     private readonly ConsolidatedBalanceService _consolidated = new();
+    private readonly RecurringPostingService _recurring = new();
 
     public LedgerService(ILedgerStore store)
     {
@@ -25,6 +26,7 @@ public sealed class LedgerService
     public IReadOnlyList<Account> Accounts { get; private set; } = Array.Empty<Account>();
     public IReadOnlyList<CategoryRule> Rules { get; private set; } = Array.Empty<CategoryRule>();
     public IReadOnlyList<Transaction> Transactions { get; private set; } = Array.Empty<Transaction>();
+    public IReadOnlyList<RecurringTransaction> RecurringTransactions { get; private set; } = Array.Empty<RecurringTransaction>();
     public IReadOnlyList<Budget> Budgets { get; private set; } = Array.Empty<Budget>();
     public IReadOnlyList<ExchangeRate> ExchangeRates { get; private set; } = Array.Empty<ExchangeRate>();
     public string BaseCurrencyCode => _store.BaseCurrencyCode;
@@ -50,6 +52,7 @@ public sealed class LedgerService
         Accounts = _store.LoadAccounts();
         Rules = _store.LoadRules();
         Transactions = _store.LoadTransactions();
+        RecurringTransactions = _store.LoadRecurringTransactions();
         Budgets = _store.LoadBudgets();
         ExchangeRates = _store.LoadExchangeRates();
     }
@@ -207,6 +210,97 @@ public sealed class LedgerService
     public IReadOnlyList<BudgetVariance> BuildBudgetVariance(string? currency = null) =>
         BudgetService.Build(BuildSummary(currency), Budgets, Accounts, currency ?? BaseCurrencyCode);
 
+    public IReadOnlyList<RecurringOccurrence> PreviewRecurring(DateOnly from, DateOnly through) =>
+        _recurring.Preview(RecurringTransactions, Transactions, from, through);
+
+    public RecurringPostResult PostRecurring(IEnumerable<RecurringOccurrence> selectedOccurrences)
+    {
+        if (selectedOccurrences is null) throw new ArgumentNullException(nameof(selectedOccurrences));
+
+        RefreshCache();
+        var result = _recurring.PostSelected(
+            RecurringTransactions,
+            Transactions,
+            selectedOccurrences,
+            _store.SaveTransaction);
+        RefreshCache();
+        return result;
+    }
+
+    public long AddRecurringTransaction(
+        string name,
+        string description,
+        string? reference,
+        int dayOfMonth,
+        long debitAccountId,
+        long creditAccountId,
+        long amountMinor,
+        string? note)
+    {
+        var recurring = CreateRecurringTransaction(
+            0, name, description, reference, dayOfMonth, debitAccountId,
+            creditAccountId, amountMinor, note);
+        var id = _store.AddRecurringTransaction(recurring);
+        RefreshCache();
+        return id;
+    }
+
+    public bool UpdateRecurringTransaction(
+        long id,
+        string name,
+        string description,
+        string? reference,
+        int dayOfMonth,
+        long debitAccountId,
+        long creditAccountId,
+        long amountMinor,
+        string? note)
+    {
+        var recurring = CreateRecurringTransaction(
+            id, name, description, reference, dayOfMonth, debitAccountId,
+            creditAccountId, amountMinor, note);
+        var ok = _store.UpdateRecurringTransaction(recurring);
+        RefreshCache();
+        return ok;
+    }
+
+    public bool DeleteRecurringTransaction(long id)
+    {
+        var ok = _store.DeleteRecurringTransaction(id);
+        RefreshCache();
+        return ok;
+    }
+
+    private RecurringTransaction CreateRecurringTransaction(
+        long id,
+        string name,
+        string description,
+        string? reference,
+        int dayOfMonth,
+        long debitAccountId,
+        long creditAccountId,
+        long amountMinor,
+        string? note)
+    {
+        var debit = Accounts.First(a => a.Id == debitAccountId);
+        var credit = Accounts.First(a => a.Id == creditAccountId);
+        if (!string.Equals(debit.CurrencyCode, credit.CurrencyCode, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Recurring accounts must use the same currency.");
+
+        var recurring = new RecurringTransaction(
+            id,
+            name,
+            description,
+            reference,
+            dayOfMonth,
+            debitAccountId,
+            creditAccountId,
+            amountMinor,
+            debit.CurrencyCode,
+            note);
+        return recurring;
+    }
+
     public void ExportLedger(string path)
     {
         using var writer = new StreamWriter(path, false, Encoding.UTF8);
@@ -243,6 +337,7 @@ public sealed class LedgerService
         sb.AppendLine("Personal Ledger Lab");
         sb.AppendLine($"Database: {DatabasePath}");
         sb.AppendLine($"Accounts: {Accounts.Count}, Rules: {Rules.Count}, Transactions: {Transactions.Count}");
+        sb.AppendLine($"Recurring templates: {RecurringTransactions.Count}");
         sb.AppendLine($"Exchange rates: {ExchangeRates.Count}, Base currency: {BaseCurrencyCode}");
         sb.AppendLine($"Fresh database: {IsFreshDatabase}");
         return sb.ToString();

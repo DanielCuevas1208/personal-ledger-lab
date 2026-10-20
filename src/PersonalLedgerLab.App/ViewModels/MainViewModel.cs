@@ -41,6 +41,18 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private long? _editingBudgetId;
     private string _budgetNote = string.Empty;
 
+    private string _recurringName = string.Empty;
+    private string _recurringDescription = string.Empty;
+    private string _recurringReference = string.Empty;
+    private int _recurringDayOfMonth = 1;
+    private Account? _recurringDebitAccount;
+    private Account? _recurringCreditAccount;
+    private decimal _recurringAmountMajor = 100m;
+    private string _recurringNote = string.Empty;
+    private long? _editingRecurringId;
+    private string _scheduledFromDate = "2025-01-01";
+    private string _scheduledThroughDate = "2025-03-31";
+
     public MainViewModel() : this(new LedgerService(null!)) { }
 
     public MainViewModel(LedgerService service)
@@ -58,6 +70,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ExportBudgetsCommand = new RelayCommand(ExecuteExportBudgets, () => Budgets.Count > 0);
         ExportBudgetVarianceCommand = new RelayCommand(ExecuteExportBudgetVariance, () => Transactions.Count > 0 && Budgets.Count > 0);
         ExportConsolidatedCommand = new RelayCommand(ExecuteExportConsolidated, () => Accounts.Count > 0);
+        SaveRecurringCommand = new RelayCommand(ExecuteSaveRecurring, CanSaveRecurring);
+        DeleteRecurringCommand = new RelayCommand(ExecuteDeleteRecurring, () => EditingRecurringId.HasValue);
+        PreviewRecurringCommand = new RelayCommand(ExecutePreviewRecurring, () => true);
+        PostRecurringCommand = new RelayCommand(ExecutePostRecurring,
+            () => RecurringPreview.Any(row => row.Selected && !row.IsPosted));
 
         Status = _service.StartupReport();
         Load();
@@ -73,6 +90,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<BudgetRow> Budgets { get; } = new();
     public ObservableCollection<BudgetVarianceRow> BudgetVariance { get; } = new();
     public ObservableCollection<ConsolidatedBalanceRow> ConsolidatedBalances { get; } = new();
+    public ObservableCollection<RecurringTemplateRow> RecurringTemplates { get; } = new();
+    public ObservableCollection<RecurringPreviewRow> RecurringPreview { get; } = new();
+    public ObservableCollection<Account> RecurringAccounts { get; } = new();
 
     public ICommand ImportCommand { get; }
     public ICommand ExportLedgerCommand { get; }
@@ -86,6 +106,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ExportBudgetsCommand { get; }
     public ICommand ExportBudgetVarianceCommand { get; }
     public ICommand ExportConsolidatedCommand { get; }
+    public ICommand SaveRecurringCommand { get; }
+    public ICommand DeleteRecurringCommand { get; }
+    public ICommand PreviewRecurringCommand { get; }
+    public ICommand PostRecurringCommand { get; }
 
     public AccountRow? SelectedAssetAccount
     {
@@ -250,6 +274,72 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public string BudgetLimitLabel => $"{BudgetLimitMajor:0.00} {(BudgetCategoryAccount?.CurrencyCode ?? "USD")}";
 
+    public string RecurringName
+    {
+        get => _recurringName;
+        set { _recurringName = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string RecurringDescription
+    {
+        get => _recurringDescription;
+        set { _recurringDescription = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string RecurringReference
+    {
+        get => _recurringReference;
+        set { _recurringReference = value; OnPropertyChanged(); }
+    }
+
+    public int RecurringDayOfMonth
+    {
+        get => _recurringDayOfMonth;
+        set { _recurringDayOfMonth = Math.Clamp(value, 1, 31); OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public Account? RecurringDebitAccount
+    {
+        get => _recurringDebitAccount;
+        set { _recurringDebitAccount = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public Account? RecurringCreditAccount
+    {
+        get => _recurringCreditAccount;
+        set { _recurringCreditAccount = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public decimal RecurringAmountMajor
+    {
+        get => _recurringAmountMajor;
+        set { _recurringAmountMajor = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string RecurringNote
+    {
+        get => _recurringNote;
+        set { _recurringNote = value; OnPropertyChanged(); }
+    }
+
+    public long? EditingRecurringId
+    {
+        get => _editingRecurringId;
+        set { _editingRecurringId = value; OnPropertyChanged(); RefreshCommandState(); }
+    }
+
+    public string ScheduledFromDate
+    {
+        get => _scheduledFromDate;
+        set { _scheduledFromDate = value; OnPropertyChanged(); }
+    }
+
+    public string ScheduledThroughDate
+    {
+        get => _scheduledThroughDate;
+        set { _scheduledThroughDate = value; OnPropertyChanged(); }
+    }
+
     public IEnumerable<StatementFormat> ImportFormats => Enum.GetValues<StatementFormat>();
 
     public IEnumerable<RuleMatchType> MatchTypes => Enum.GetValues(typeof(RuleMatchType)).Cast<RuleMatchType>();
@@ -266,11 +356,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         Budgets.Clear();
         BudgetVariance.Clear();
         ConsolidatedBalances.Clear();
+        RecurringTemplates.Clear();
+        RecurringPreview.Clear();
+        RecurringAccounts.Clear();
 
         BaseCurrencyCode = _service.BaseCurrencyCode;
 
         foreach (var account in _service.Accounts.OrderBy(a => a.Code))
         {
+            RecurringAccounts.Add(account);
             long balance = _service.AccountBalance(account.Id);
             Accounts.Add(new AccountRow(account.Id, account.Code, account.Name, account.Type.ToString(),
                 LedgerService.FormatMinor(balance), account.CurrencyCode));
@@ -397,7 +491,197 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         if (BudgetCategoryAccount is null)
             BudgetCategoryAccount = CategoryAccounts.FirstOrDefault();
 
+        foreach (var recurring in _service.RecurringTransactions)
+        {
+            var debit = _service.Accounts.FirstOrDefault(a => a.Id == recurring.DebitAccountId);
+            var credit = _service.Accounts.FirstOrDefault(a => a.Id == recurring.CreditAccountId);
+            RecurringTemplates.Add(new RecurringTemplateRow(
+                recurring.Id,
+                recurring.Name,
+                recurring.Description,
+                recurring.DayOfMonth,
+                debit?.Code ?? "?",
+                credit?.Code ?? "?",
+                LedgerService.FormatMinor(recurring.AmountMinor),
+                recurring.CurrencyCode,
+                recurring.Note ?? string.Empty));
+        }
+
+        if (RecurringDebitAccount is null)
+            RecurringDebitAccount = RecurringAccounts.FirstOrDefault(a => a.Code == "5400") ?? RecurringAccounts.FirstOrDefault();
+        if (RecurringCreditAccount is null)
+            RecurringCreditAccount = RecurringAccounts.FirstOrDefault(a => a.Code == "1000") ?? RecurringAccounts.FirstOrDefault();
+        RefreshRecurringPreview();
+
         RefreshCommandState();
+    }
+
+    private bool TryGetScheduleRange(out DateOnly from, out DateOnly through)
+    {
+        bool parsedFrom = DateOnly.TryParseExact(
+            ScheduledFromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out from);
+        bool parsedThrough = DateOnly.TryParseExact(
+            ScheduledThroughDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out through);
+        if (!parsedFrom || !parsedThrough)
+        {
+            Status = "Use dates in yyyy-MM-dd format.";
+            return false;
+        }
+        if (from > through)
+        {
+            Status = "The preview start date must be on or before the end date.";
+            return false;
+        }
+        return true;
+    }
+
+    private void RefreshRecurringPreview()
+    {
+        if (!DateOnly.TryParseExact(ScheduledFromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var from) ||
+            !DateOnly.TryParseExact(ScheduledThroughDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var through) || from > through)
+            return;
+
+        RecurringPreview.Clear();
+        foreach (var occurrence in _service.PreviewRecurring(from, through))
+        {
+            var debit = _service.Accounts.FirstOrDefault(a => a.Id == occurrence.DebitAccountId);
+            var credit = _service.Accounts.FirstOrDefault(a => a.Id == occurrence.CreditAccountId);
+            RecurringPreview.Add(new RecurringPreviewRow(
+                occurrence,
+                debit?.Code ?? "?",
+                credit?.Code ?? "?"));
+        }
+    }
+
+    private void ExecutePreviewRecurring()
+    {
+        try
+        {
+            if (!TryGetScheduleRange(out _, out _)) return;
+            RefreshRecurringPreview();
+            int ready = RecurringPreview.Count(row => !row.IsPosted);
+            Status = $"Previewed {RecurringPreview.Count} recurring entries. {ready} are ready to post.";
+            RefreshCommandState();
+        }
+        catch (Exception ex)
+        {
+            Status = "Recurring preview failed: " + ex.Message;
+        }
+    }
+
+    private void ExecutePostRecurring()
+    {
+        try
+        {
+            var selected = RecurringPreview
+                .Where(row => row.Selected && !row.IsPosted)
+                .Select(row => row.Occurrence)
+                .ToList();
+            if (selected.Count == 0)
+            {
+                Status = "Select at least one ready entry.";
+                return;
+            }
+
+            var result = _service.PostRecurring(selected);
+            Load();
+            Status = $"Posted {result.PostedCount} recurring entries. " +
+                     $"Skipped {result.AlreadyPostedCount} already posted entries.";
+        }
+        catch (Exception ex)
+        {
+            Status = "Recurring posting failed: " + ex.Message;
+        }
+    }
+
+    private bool CanSaveRecurring() =>
+        !string.IsNullOrWhiteSpace(RecurringName) &&
+        !string.IsNullOrWhiteSpace(RecurringDescription) &&
+        RecurringDebitAccount is not null &&
+        RecurringCreditAccount is not null &&
+        RecurringDebitAccount.Id != RecurringCreditAccount.Id &&
+        string.Equals(RecurringDebitAccount.CurrencyCode, RecurringCreditAccount.CurrencyCode,
+            StringComparison.OrdinalIgnoreCase) &&
+        RecurringAmountMajor > 0m;
+
+    private void ExecuteSaveRecurring()
+    {
+        try
+        {
+            if (RecurringDebitAccount is null || RecurringCreditAccount is null) return;
+            long amountMinor = (long)Math.Round(RecurringAmountMajor * 100m, MidpointRounding.ToEven);
+            string? reference = string.IsNullOrWhiteSpace(RecurringReference) ? null : RecurringReference;
+            string? note = string.IsNullOrWhiteSpace(RecurringNote) ? null : RecurringNote;
+            if (EditingRecurringId.HasValue)
+            {
+                _service.UpdateRecurringTransaction(
+                    EditingRecurringId.Value, RecurringName, RecurringDescription,
+                    reference, RecurringDayOfMonth, RecurringDebitAccount.Id,
+                    RecurringCreditAccount.Id, amountMinor, note);
+                Status = $"Updated recurring transaction {RecurringName}.";
+            }
+            else
+            {
+                long id = _service.AddRecurringTransaction(
+                    RecurringName, RecurringDescription, reference, RecurringDayOfMonth,
+                    RecurringDebitAccount.Id, RecurringCreditAccount.Id, amountMinor, note);
+                EditingRecurringId = id;
+                Status = $"Created recurring transaction {RecurringName} (id {id}).";
+            }
+            Load();
+        }
+        catch (Exception ex)
+        {
+            Status = "Save recurring transaction failed: " + ex.Message;
+        }
+    }
+
+    private void ExecuteDeleteRecurring()
+    {
+        try
+        {
+            if (!EditingRecurringId.HasValue) return;
+            _service.DeleteRecurringTransaction(EditingRecurringId.Value);
+            ResetRecurringEditor();
+            Load();
+            Status = "Recurring transaction deleted.";
+        }
+        catch (Exception ex)
+        {
+            Status = "Delete recurring transaction failed: " + ex.Message;
+        }
+    }
+
+    public void BeginEditRecurring(RecurringTemplateRow row)
+    {
+        var recurring = _service.RecurringTransactions.FirstOrDefault(t => t.Id == row.Id);
+        if (recurring is null) return;
+        EditingRecurringId = recurring.Id;
+        RecurringName = recurring.Name;
+        RecurringDescription = recurring.Description;
+        RecurringReference = recurring.Reference ?? string.Empty;
+        RecurringDayOfMonth = recurring.DayOfMonth;
+        RecurringDebitAccount = RecurringAccounts.FirstOrDefault(a => a.Id == recurring.DebitAccountId);
+        RecurringCreditAccount = RecurringAccounts.FirstOrDefault(a => a.Id == recurring.CreditAccountId);
+        RecurringAmountMajor = recurring.AmountMinor / 100m;
+        RecurringNote = recurring.Note ?? string.Empty;
+    }
+
+    public void ResetRecurringEditor()
+    {
+        EditingRecurringId = null;
+        RecurringName = string.Empty;
+        RecurringDescription = string.Empty;
+        RecurringReference = string.Empty;
+        RecurringDayOfMonth = 1;
+        RecurringAmountMajor = 100m;
+        RecurringNote = string.Empty;
+        RecurringDebitAccount = RecurringAccounts.FirstOrDefault(a => a.Code == "5400") ?? RecurringAccounts.FirstOrDefault();
+        RecurringCreditAccount = RecurringAccounts.FirstOrDefault(a => a.Code == "1000") ?? RecurringAccounts.FirstOrDefault();
     }
 
     private void ExecuteImport()
@@ -670,6 +954,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         (ExportBudgetsCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (ExportBudgetVarianceCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (ExportConsolidatedCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (SaveRecurringCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (DeleteRecurringCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (PreviewRecurringCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (PostRecurringCommand as RelayCommand)?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(BudgetLimitLabel));
     }
 
@@ -695,6 +983,30 @@ public sealed record MonthlyTotalRow(string Month, string Transactions, string I
 public sealed record BudgetRow(long Id, string Period, string Name, string AccountCode, string AccountName, string AccountType, string Limit, string Currency, string Note);
 public sealed record BudgetVarianceRow(string Month, string AccountCode, string AccountName, string AccountType, string Limit, string Actual, string Variance, string Currency, string Explanation);
 public sealed record ConsolidatedBalanceRow(string AccountCode, string AccountName, string AccountType, string NativeBalance, string BaseBalance, string Explanation);
+public sealed record RecurringTemplateRow(long Id, string Name, string Description, int DayOfMonth, string DebitAccountCode, string CreditAccountCode, string Amount, string Currency, string Note);
+
+public sealed class RecurringPreviewRow
+{
+    public RecurringPreviewRow(RecurringOccurrence occurrence, string debitAccountCode, string creditAccountCode)
+    {
+        Occurrence = occurrence;
+        DebitAccountCode = debitAccountCode;
+        CreditAccountCode = creditAccountCode;
+        Selected = !occurrence.IsPosted;
+    }
+
+    public RecurringOccurrence Occurrence { get; }
+    public string Date => Occurrence.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public string Name => Occurrence.Name;
+    public string DebitAccountCode { get; }
+    public string CreditAccountCode { get; }
+    public string Amount => LedgerService.FormatMinor(Occurrence.AmountMinor) + " " + Occurrence.CurrencyCode;
+    public bool IsPosted => Occurrence.IsPosted;
+    public string Status => Occurrence.IsPosted
+        ? $"Posted ({Occurrence.PostedTransactionId})"
+        : "Ready to post";
+    public bool Selected { get; set; }
+}
 
 internal sealed class RelayCommand : ICommand
 {

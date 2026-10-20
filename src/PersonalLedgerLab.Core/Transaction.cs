@@ -15,6 +15,8 @@ public sealed class Transaction
     public string? SourceCurrencyCode { get; set; }
     public long? SourceAmountMinor { get; set; }
     public long? ExchangeRatePpm { get; set; }
+    public long? RecurringTemplateId { get; set; }
+    public DateOnly? RecurringOccurrenceDate { get; set; }
     public List<Posting> Postings { get; set; } = new();
 
     public Transaction() { }

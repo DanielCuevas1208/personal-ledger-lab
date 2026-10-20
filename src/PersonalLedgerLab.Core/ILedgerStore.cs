@@ -18,6 +18,11 @@ public interface ILedgerStore
     long SaveTransaction(Transaction transaction);
     void ClearTransactions();
 
+    IReadOnlyList<RecurringTransaction> LoadRecurringTransactions();
+    long AddRecurringTransaction(RecurringTransaction recurringTransaction);
+    bool UpdateRecurringTransaction(RecurringTransaction recurringTransaction);
+    bool DeleteRecurringTransaction(long recurringTransactionId);
+
     IReadOnlyList<Budget> LoadBudgets();
     long AddBudget(Budget budget);
     bool UpdateBudget(Budget budget);

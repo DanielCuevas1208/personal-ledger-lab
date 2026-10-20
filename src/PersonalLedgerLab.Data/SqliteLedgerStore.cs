@@ -188,7 +188,8 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             txCmd.CommandText = @"
                 SELECT id, date, description, reference, source,
                        applied_rule_id, rule_explanation,
-                       source_currency_code, source_amount_minor, exchange_rate_ppm
+                       source_currency_code, source_amount_minor, exchange_rate_ppm,
+                       recurring_template_id, recurring_occurrence_date
                 FROM transactions ORDER BY date, id;";
             using var reader = txCmd.ExecuteReader();
             while (reader.Read())
@@ -204,7 +205,11 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                     RuleExplanation = reader.IsDBNull(6) ? null : reader.GetString(6),
                     SourceCurrencyCode = reader.IsDBNull(7) ? null : reader.GetString(7),
                     SourceAmountMinor = reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                    ExchangeRatePpm = reader.IsDBNull(9) ? null : reader.GetInt64(9)
+                    ExchangeRatePpm = reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                    RecurringTemplateId = reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                    RecurringOccurrenceDate = reader.IsDBNull(11)
+                        ? null
+                        : DateOnly.Parse(reader.GetString(11), CultureInfo.InvariantCulture)
                 };
                 byId[tx.Id] = tx;
             }
@@ -252,9 +257,11 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 txCmd.CommandText = @"
                     INSERT INTO transactions
                         (date, description, reference, source, applied_rule_id, rule_explanation,
-                         source_currency_code, source_amount_minor, exchange_rate_ppm)
+                         source_currency_code, source_amount_minor, exchange_rate_ppm,
+                         recurring_template_id, recurring_occurrence_date)
                     VALUES ($date, $desc, $ref, $source, $ruleId, $ruleExplain,
-                            $sourceCurrency, $sourceAmount, $ratePpm);
+                            $sourceCurrency, $sourceAmount, $ratePpm,
+                            $recurringTemplateId, $recurringOccurrenceDate);
                     SELECT last_insert_rowid();";
                 AddParam(txCmd, "$date", transaction.Date.ToString("yyyy-MM-dd"));
                 AddParam(txCmd, "$desc", transaction.Description);
@@ -265,6 +272,9 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 AddParam(txCmd, "$sourceCurrency", (object?)transaction.SourceCurrencyCode ?? DBNull.Value);
                 AddParam(txCmd, "$sourceAmount", (object?)transaction.SourceAmountMinor ?? DBNull.Value);
                 AddParam(txCmd, "$ratePpm", (object?)transaction.ExchangeRatePpm ?? DBNull.Value);
+                AddParam(txCmd, "$recurringTemplateId", (object?)transaction.RecurringTemplateId ?? DBNull.Value);
+                AddParam(txCmd, "$recurringOccurrenceDate",
+                    transaction.RecurringOccurrenceDate?.ToString("yyyy-MM-dd") ?? (object)DBNull.Value);
                 newId = (long)txCmd.ExecuteScalar()!;
             }
 
@@ -309,6 +319,95 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             tx.Rollback();
             throw;
         }
+    }
+
+    public IReadOnlyList<RecurringTransaction> LoadRecurringTransactions()
+    {
+        var recurring = new List<RecurringTransaction>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT id, name, description, reference, day_of_month,
+                   debit_account_id, credit_account_id, amount_minor,
+                   currency_code, note
+            FROM recurring_transactions
+            ORDER BY name, id;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var template = new RecurringTransaction
+            {
+                Id = reader.GetInt64(0),
+                Name = reader.GetString(1),
+                Description = reader.GetString(2),
+                Reference = reader.IsDBNull(3) ? null : reader.GetString(3),
+                DayOfMonth = reader.GetInt32(4),
+                DebitAccountId = reader.GetInt64(5),
+                CreditAccountId = reader.GetInt64(6),
+                AmountMinor = reader.GetInt64(7),
+                CurrencyCode = reader.GetString(8),
+                Note = reader.IsDBNull(9) ? null : reader.GetString(9)
+            };
+            template.Validate();
+            recurring.Add(template);
+        }
+        return recurring;
+    }
+
+    public long AddRecurringTransaction(RecurringTransaction recurringTransaction)
+    {
+        if (recurringTransaction is null) throw new ArgumentNullException(nameof(recurringTransaction));
+        recurringTransaction.Validate();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO recurring_transactions
+                (name, description, reference, day_of_month, debit_account_id,
+                 credit_account_id, amount_minor, currency_code, note)
+            VALUES ($name, $description, $reference, $day, $debit, $credit,
+                    $amount, $currency, $note);
+            SELECT last_insert_rowid();";
+        AddParam(cmd, "$name", recurringTransaction.Name);
+        AddParam(cmd, "$description", recurringTransaction.Description);
+        AddParam(cmd, "$reference", (object?)recurringTransaction.Reference ?? DBNull.Value);
+        AddParam(cmd, "$day", recurringTransaction.DayOfMonth);
+        AddParam(cmd, "$debit", recurringTransaction.DebitAccountId);
+        AddParam(cmd, "$credit", recurringTransaction.CreditAccountId);
+        AddParam(cmd, "$amount", recurringTransaction.AmountMinor);
+        AddParam(cmd, "$currency", recurringTransaction.CurrencyCode);
+        AddParam(cmd, "$note", (object?)recurringTransaction.Note ?? DBNull.Value);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public bool UpdateRecurringTransaction(RecurringTransaction recurringTransaction)
+    {
+        if (recurringTransaction is null) throw new ArgumentNullException(nameof(recurringTransaction));
+        recurringTransaction.Validate();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE recurring_transactions
+            SET name = $name, description = $description, reference = $reference,
+                day_of_month = $day, debit_account_id = $debit,
+                credit_account_id = $credit, amount_minor = $amount,
+                currency_code = $currency, note = $note
+            WHERE id = $id;";
+        AddParam(cmd, "$id", recurringTransaction.Id);
+        AddParam(cmd, "$name", recurringTransaction.Name);
+        AddParam(cmd, "$description", recurringTransaction.Description);
+        AddParam(cmd, "$reference", (object?)recurringTransaction.Reference ?? DBNull.Value);
+        AddParam(cmd, "$day", recurringTransaction.DayOfMonth);
+        AddParam(cmd, "$debit", recurringTransaction.DebitAccountId);
+        AddParam(cmd, "$credit", recurringTransaction.CreditAccountId);
+        AddParam(cmd, "$amount", recurringTransaction.AmountMinor);
+        AddParam(cmd, "$currency", recurringTransaction.CurrencyCode);
+        AddParam(cmd, "$note", (object?)recurringTransaction.Note ?? DBNull.Value);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    public bool DeleteRecurringTransaction(long recurringTransactionId)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM recurring_transactions WHERE id = $id;";
+        AddParam(cmd, "$id", recurringTransactionId);
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     public IReadOnlyList<Budget> LoadBudgets()
@@ -507,7 +606,9 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
                 rule_explanation TEXT,
                 source_currency_code TEXT,
                 source_amount_minor INTEGER,
-                exchange_rate_ppm INTEGER
+                exchange_rate_ppm INTEGER,
+                recurring_template_id INTEGER,
+                recurring_occurrence_date TEXT
             );
 
             CREATE TABLE IF NOT EXISTS postings (
@@ -536,6 +637,21 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             CREATE UNIQUE INDEX IF NOT EXISTS idx_budgets_scope
                 ON budgets(category_account_id, year, month);
 
+            CREATE TABLE IF NOT EXISTS recurring_transactions (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                reference TEXT,
+                day_of_month INTEGER NOT NULL,
+                debit_account_id INTEGER NOT NULL,
+                credit_account_id INTEGER NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                currency_code TEXT NOT NULL,
+                note TEXT,
+                FOREIGN KEY (debit_account_id) REFERENCES accounts(id),
+                FOREIGN KEY (credit_account_id) REFERENCES accounts(id)
+            );
+
             CREATE TABLE IF NOT EXISTS exchange_rates (
                 id INTEGER PRIMARY KEY,
                 effective_date TEXT NOT NULL,
@@ -563,8 +679,16 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
         TryAddColumn("transactions", "source_currency_code", "TEXT");
         TryAddColumn("transactions", "source_amount_minor", "INTEGER");
         TryAddColumn("transactions", "exchange_rate_ppm", "INTEGER");
+        TryAddColumn("transactions", "recurring_template_id", "INTEGER");
+        TryAddColumn("transactions", "recurring_occurrence_date", "TEXT");
         EnsureExchangeRatesTable();
         EnsureLedgerSettingsTable();
+        EnsureRecurringTransactionsTable();
+        Execute(@"
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_recurring_occurrence
+                ON transactions(recurring_template_id, recurring_occurrence_date)
+                WHERE recurring_template_id IS NOT NULL
+                  AND recurring_occurrence_date IS NOT NULL;");
         if (!IsFreshDatabase)
         {
             EnsureEurSavingsAccount();
@@ -620,6 +744,27 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
             WHERE NOT EXISTS (
                 SELECT 1 FROM ledger_settings WHERE key = 'base_currency_code');";
         cmd.ExecuteNonQuery();
+    }
+
+    private void EnsureRecurringTransactionsTable()
+    {
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS recurring_transactions (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                reference TEXT,
+                day_of_month INTEGER NOT NULL,
+                debit_account_id INTEGER NOT NULL,
+                credit_account_id INTEGER NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                currency_code TEXT NOT NULL,
+                note TEXT,
+                FOREIGN KEY (debit_account_id) REFERENCES accounts(id),
+                FOREIGN KEY (credit_account_id) REFERENCES accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_recurring_transactions_day
+                ON recurring_transactions(day_of_month, id);");
     }
 
     private void EnsureEurSavingsAccount()
@@ -765,6 +910,18 @@ public sealed class SqliteLedgerStore : ILedgerStore, IDisposable
 
         foreach (var (date, from, to, ppm) in seedRates)
             AddExchangeRate(new ExchangeRate(0, date, from, to, ppm));
+
+        AddRecurringTransaction(new RecurringTransaction(
+            0,
+            "Monthly utility reserve",
+            "Monthly utility reserve",
+            "UTILITIES",
+            31,
+            AccountId("5400"),
+            AccountId("1000"),
+            95_00L,
+            "USD",
+            "Seeded day-31 example. February clamps to its last day."));
     }
 
     private void Execute(string sql)

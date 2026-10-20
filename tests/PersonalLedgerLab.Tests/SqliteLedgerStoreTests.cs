@@ -24,6 +24,7 @@ public class SqliteLedgerStoreTests : IDisposable
         Assert.Contains(accounts, a => a.Code == "5100");
         Assert.True(_store.LoadRules().Count > 0);
         Assert.True(_store.LoadExchangeRates().Count > 0);
+        Assert.Contains(_store.LoadRecurringTransactions(), recurring => recurring.DayOfMonth == 31);
         Assert.Equal("USD", _store.BaseCurrencyCode);
     }
 

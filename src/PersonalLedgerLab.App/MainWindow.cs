@@ -53,6 +53,7 @@ public class MainWindow : Window
         tabs.Items.Add(new TabItem { Header = "Import", Content = BuildImport() });
         tabs.Items.Add(new TabItem { Header = "Categorization rules", Content = BuildRules() });
         tabs.Items.Add(new TabItem { Header = "Budgets", Content = BuildBudgets() });
+        tabs.Items.Add(new TabItem { Header = "Scheduled postings", Content = BuildScheduledPostings() });
         tabs.Items.Add(new TabItem { Header = "Monthly summary", Content = BuildSummary() });
 
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
@@ -280,6 +281,126 @@ public class MainWindow : Window
         return wrapper;
     }
 
+    private Control BuildScheduledPostings()
+    {
+        var editor = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 12, 0) };
+        editor.Children.Add(new TextBlock { Text = "Recurring transaction editor", FontWeight = FontWeight.Bold });
+
+        var name = new TextBox { Watermark = "Name" };
+        BindTo(name, TextBox.TextProperty, nameof(_vm.RecurringName));
+        editor.Children.Add(name);
+        var description = new TextBox { Watermark = "Description" };
+        BindTo(description, TextBox.TextProperty, nameof(_vm.RecurringDescription));
+        editor.Children.Add(description);
+        var reference = new TextBox { Watermark = "Reference (optional)" };
+        BindTo(reference, TextBox.TextProperty, nameof(_vm.RecurringReference));
+        editor.Children.Add(reference);
+
+        var dayLabel = new TextBlock { Text = "Day", VerticalAlignment = VerticalAlignment.Center, Width = 60 };
+        var day = new NumericUpDown { Minimum = 1, Maximum = 31, FormatString = "0" };
+        BindTo(day, NumericUpDown.ValueProperty, nameof(_vm.RecurringDayOfMonth));
+        var dayHint = new TextBlock { Text = "Short months use their last day.", Opacity = 0.65, VerticalAlignment = VerticalAlignment.Center };
+        var dayRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        dayRow.Children.Add(dayLabel);
+        dayRow.Children.Add(day);
+        dayRow.Children.Add(dayHint);
+        editor.Children.Add(dayRow);
+
+        var debit = new ComboBox { Width = 260 };
+        debit.ItemTemplate = new FuncDataTemplate<Account>((a, _) => new TextBlock { Text = a is null ? string.Empty : $"{a.Code} {a.Name}" });
+        debit.ItemsSource = _vm.RecurringAccounts;
+        BindTo(debit, SelectingItemsControl.SelectedItemProperty, nameof(_vm.RecurringDebitAccount));
+        var credit = new ComboBox { Width = 260 };
+        credit.ItemTemplate = new FuncDataTemplate<Account>((a, _) => new TextBlock { Text = a is null ? string.Empty : $"{a.Code} {a.Name}" });
+        credit.ItemsSource = _vm.RecurringAccounts;
+        BindTo(credit, SelectingItemsControl.SelectedItemProperty, nameof(_vm.RecurringCreditAccount));
+        var accountRow = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
+        accountRow.Children.Add(new TextBlock { Text = "Debit account", Opacity = 0.65 });
+        accountRow.Children.Add(debit);
+        accountRow.Children.Add(new TextBlock { Text = "Credit account", Opacity = 0.65 });
+        accountRow.Children.Add(credit);
+        editor.Children.Add(accountRow);
+
+        var amount = new NumericUpDown { Minimum = 0, Maximum = 1000000000, FormatString = "0.00" };
+        BindTo(amount, NumericUpDown.ValueProperty, nameof(_vm.RecurringAmountMajor));
+        var amountLabel = new TextBlock { Text = "Positive amount", Opacity = 0.65, VerticalAlignment = VerticalAlignment.Center };
+        var amountRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        amountRow.Children.Add(new TextBlock { Text = "Amount", Width = 60, VerticalAlignment = VerticalAlignment.Center });
+        amountRow.Children.Add(amount);
+        amountRow.Children.Add(amountLabel);
+        editor.Children.Add(amountRow);
+
+        var note = new TextBox { Watermark = "Note (optional)" };
+        BindTo(note, TextBox.TextProperty, nameof(_vm.RecurringNote));
+        editor.Children.Add(note);
+
+        var save = new Button { Content = "Save recurring", Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x6F, 0xEB)), Foreground = Brushes.White };
+        BindTo(save, Button.CommandProperty, nameof(_vm.SaveRecurringCommand));
+        var delete = new Button { Content = "Delete" };
+        BindTo(delete, Button.CommandProperty, nameof(_vm.DeleteRecurringCommand));
+        var reset = new Button { Content = "New" };
+        reset.Click += (_, _) => _vm.ResetRecurringEditor();
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        actions.Children.Add(save);
+        actions.Children.Add(delete);
+        actions.Children.Add(reset);
+        editor.Children.Add(actions);
+
+        var templates = NewGrid(nameof(_vm.RecurringTemplates));
+        templates.DoubleTapped += RecurringGrid_DoubleTapped;
+        Grid.SetRow(templates, 0);
+
+        var from = new TextBox { Width = 130 };
+        BindTo(from, TextBox.TextProperty, nameof(_vm.ScheduledFromDate));
+        var through = new TextBox { Width = 130 };
+        BindTo(through, TextBox.TextProperty, nameof(_vm.ScheduledThroughDate));
+        var preview = new Button { Content = "Preview" };
+        BindTo(preview, Button.CommandProperty, nameof(_vm.PreviewRecurringCommand));
+        var post = new Button { Content = "Post selected", Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x6F, 0xEB)), Foreground = Brushes.White };
+        BindTo(post, Button.CommandProperty, nameof(_vm.PostRecurringCommand));
+        var previewActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 6, 0, 6) };
+        previewActions.Children.Add(new TextBlock { Text = "From", VerticalAlignment = VerticalAlignment.Center });
+        previewActions.Children.Add(from);
+        previewActions.Children.Add(new TextBlock { Text = "Through", VerticalAlignment = VerticalAlignment.Center });
+        previewActions.Children.Add(through);
+        previewActions.Children.Add(preview);
+        previewActions.Children.Add(post);
+
+        var previewGrid = NewRecurringPreviewGrid();
+        var previewPanel = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        Grid.SetRow(previewActions, 0);
+        Grid.SetRow(previewGrid, 1);
+        previewPanel.Children.Add(previewActions);
+        previewPanel.Children.Add(previewGrid);
+        Grid.SetRow(previewPanel, 1);
+
+        var right = new Grid { RowDefinitions = new RowDefinitions("*,2*") };
+        right.Children.Add(templates);
+        right.Children.Add(previewPanel);
+        Grid.SetColumn(right, 1);
+
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("2*,3*"),
+            Margin = new Thickness(8),
+            Children = { editor, right }
+        };
+    }
+
+    private DataGrid NewRecurringPreviewGrid()
+    {
+        var grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = false, MinColumnWidth = 90 };
+        grid.Columns.Add(new DataGridCheckBoxColumn { Header = "Post", Binding = new Binding("Selected") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Date", Binding = new Binding("Date") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Name", Binding = new Binding("Name") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Debit", Binding = new Binding("DebitAccountCode") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Credit", Binding = new Binding("CreditAccountCode") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Amount", Binding = new Binding("Amount") });
+        grid.Columns.Add(new DataGridTextColumn { Header = "Status", Binding = new Binding("Status") });
+        BindTo(grid, ItemsControl.ItemsSourceProperty, nameof(_vm.RecurringPreview));
+        return grid;
+    }
+
     private Control BuildBudgets()
     {
         var editor = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 12, 0) };
@@ -382,6 +503,12 @@ public class MainWindow : Window
     {
         if (sender is DataGrid grid && grid.SelectedItem is BudgetRow row)
             _vm.BeginEditBudget(row);
+    }
+
+    private void RecurringGrid_DoubleTapped(object? sender, RoutedEventArgs e)
+    {
+        if (sender is DataGrid grid && grid.SelectedItem is RecurringTemplateRow row)
+            _vm.BeginEditRecurring(row);
     }
 
     private DataGrid NewGrid(string itemsPath)
